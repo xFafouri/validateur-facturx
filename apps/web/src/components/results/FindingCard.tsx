@@ -46,7 +46,10 @@ export function FindingCard({ finding }: { finding: FindingDto }) {
           {style.label}
         </span>
 
-        {finding.ruleId && (
+        {/* `ENGINE-*` identifiers are synthetic - assigned internally so engine-level findings can
+            be explained like any other. They are not real rule references and mean nothing to a
+            user, so the ruleset label carries them instead. */}
+        {finding.ruleId && !finding.ruleId.startsWith('ENGINE-') && (
           <span className="rounded bg-navy-100 px-2 py-0.5 font-mono text-xs font-semibold text-navy-800">
             {finding.ruleId}
           </span>

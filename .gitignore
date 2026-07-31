@@ -27,3 +27,6 @@ packages/db/prisma/migrations/dev.db*
 
 # Downloaded official test corpus (fetched by scripts/fetch-samples.sh)
 packages/facturx/test/corpus/vendor/
+
+# Generated demo invoices (rebuild: pnpm --filter @facturx/core demo)
+packages/facturx/test/corpus/demo/

@@ -446,6 +446,45 @@ const PEPPOL: Record<string, CatalogueEntry> = {
 };
 
 /* -------------------------------------------------------------------------- */
+/* Engine-level checks (no BR-* identifier)                                   */
+/* -------------------------------------------------------------------------- */
+
+const ENGINE: Record<string, CatalogueEntry> = {
+  'ENGINE-ARITHMETIC': {
+    title: 'Contrôle arithmétique global du document',
+    meaning:
+      "Le moteur recalcule l'ensemble de la facture à partir des lignes et compare le résultat aux totaux déclarés.",
+    cause:
+      'Un ou plusieurs totaux ne découlent pas des montants détaillés. Le message indique le détail du calcul attendu, ligne par ligne.',
+    fix: "Le message ci-dessous donne la somme exacte que le moteur obtient. Comparez-la à vos totaux : l'écart désigne directement la ligne ou le total à corriger.",
+  },
+  'ENGINE-SCHEMA': {
+    title: 'Le XML ne respecte pas le schéma XSD du profil déclaré',
+    meaning:
+      "Avant toute règle de gestion, le XML doit être conforme au schéma du profil qu'il déclare : éléments autorisés, ordre imposé, types de données.",
+    cause:
+      "Le plus souvent, un champ appartenant à un profil plus riche a été inséré dans un document déclarant un profil plus simple — par exemple un contact vendeur (BG-6) dans un document BASIC, qui ne l'autorise pas. L'ordre des éléments CII est également imposé et ne peut pas être modifié.",
+    fix: "Le message indique la ligne et l'élément fautif. Soit vous retirez cet élément, soit vous déclarez un profil qui l'autorise (EN 16931 plutôt que BASIC). Attention : déclarer un profil plus riche vous oblige à renseigner tous ses champs obligatoires.",
+  },
+  'ENGINE-EXTRACTION': {
+    title: "Le fichier n'a pas pu être lu comme une facture électronique",
+    meaning:
+      "Le moteur n'a trouvé ni XML de facture exploitable dans le PDF, ni document CII valide.",
+    cause:
+      "Le fichier est un PDF ordinaire sans XML embarqué, un fichier corrompu, ou un format non reconnu. Un PDF issu d'un logiciel de facturation classique, même parfaitement présenté, ne contient pas de XML.",
+    fix: "Vérifiez que votre logiciel produit bien du Factur-X, c'est-à-dire un PDF/A-3 contenant une pièce jointe nommée exactement « factur-x.xml ». Un PDF imprimé puis scanné ne conviendra jamais.",
+  },
+  'ENGINE-PDFA': {
+    title: 'Le conteneur PDF ne respecte pas PDF/A-3',
+    meaning:
+      "Factur-X impose le format PDF/A-3, qui garantit la lisibilité à long terme exigée par l'obligation d'archivage.",
+    cause:
+      'Polices non incorporées, absence de profil colorimétrique (OutputIntent), ou métadonnées XMP incomplètes. Ce sont les oublis les plus fréquents des générateurs de PDF.',
+    fix: 'Régénérez le PDF avec une bibliothèque produisant du PDF/A-3 : toutes les polices doivent être incorporées, un profil colorimétrique déclaré, et les métadonnées XMP doivent annoncer pdfaid:part=3.',
+  },
+};
+
+/* -------------------------------------------------------------------------- */
 
 const CATALOGUE: Record<string, CatalogueEntry> = {
   ...MANDATORY,
@@ -454,6 +493,7 @@ const CATALOGUE: Record<string, CatalogueEntry> = {
   ...CODE_LISTS,
   ...FRENCH,
   ...PEPPOL,
+  ...ENGINE,
 };
 
 /**
@@ -611,6 +651,8 @@ export function rulesetLabel(ruleset: Ruleset): string {
       return 'Règles allemandes (XRechnung)';
     case 'peppol':
       return 'Interopérabilité PEPPOL';
+    case 'engine':
+      return 'Contrôle structurel';
     case 'other':
       return 'Autre';
   }

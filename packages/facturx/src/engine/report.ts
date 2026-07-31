@@ -76,6 +76,9 @@ const ID_MARKER = /\s*\[ID\s+([A-Za-z0-9_.-]+)\]\s*/;
  * XRechnung 3.0, Germany's national CIUS.
  */
 function classifyRuleset(sourcePath: string | null, ruleId: string | null): Ruleset {
+  // Engine-level findings are identified by their synthetic id and have no Schematron source.
+  if (ruleId?.startsWith('ENGINE-')) return 'engine';
+
   if (sourcePath) {
     if (/XP_Z12|BR-FR-Flux/i.test(sourcePath)) return 'cius-fr';
     if (/XR_\d|XRechnung/i.test(sourcePath)) return 'xrechnung-de';
@@ -92,14 +95,39 @@ function classifyRuleset(sourcePath: string | null, ruleId: string | null): Rule
 }
 
 /**
+ * Findings the engine raises itself, outside any Schematron ruleset.
+ *
+ * These arrive with no rule identifier, which previously left them classified as `other` with no
+ * explanation - displayed as an empty badge next to a message that is often the single most useful
+ * line in the report (the arithmetic check spells out the full sum, e.g.
+ * `1730.00 = 1250.00 + 390.00 + 90.00`). Synthetic identifiers let the French catalogue explain
+ * them like any other finding.
+ */
+const ENGINE_PATTERNS: ReadonlyArray<{ readonly test: RegExp; readonly id: string }> = [
+  { test: /^\s*Arithmetical issue/i, id: 'ENGINE-ARITHMETIC' },
+  {
+    test: /schema validation fails|SAXParseException|cvc-complex-type|cvc-datatype/i,
+    id: 'ENGINE-SCHEMA',
+  },
+  { test: /XML could not be extracted|does not look like PDF nor XML/i, id: 'ENGINE-EXTRACTION' },
+  { test: /veraPDF|PDF\/A|pdfa/i, id: 'ENGINE-PDFA' },
+];
+
+/** Matches an engine-level finding, or `null` if the message is Schematron output. */
+export function engineRuleId(message: string): string | null {
+  return ENGINE_PATTERNS.find(({ test }) => test.test(message))?.id ?? null;
+}
+
+/**
  * Recovers the rule identifier.
  *
- * Four distinct shapes occur in practice, so they are tried in order of reliability:
+ * Five distinct shapes occur in practice, tried in order of reliability:
  *
  * 1. `[ID BR-FR-05_BT-22_PMT]` - canonical, appended by the Schematron harness.
  * 2. `[BR-CO-10]-Sum of Invoice line net amount…` - bracketed prefix, EN 16931 style.
  * 3. `BR-FR-12/BT-49 : Le BT-49 est obligatoire.` - French style, slash-qualified.
  * 4. Bare mention anywhere in the text.
+ * 5. Engine-level messages with no rule at all, given a synthetic `ENGINE-*` identifier.
  *
  * Returns both the base rule (`BR-FR-05`, used for explanation lookup) and the full variant
  * identifier (`BR-FR-05_BT-22_PMT`) when they differ, since one French rule can fail several ways
@@ -138,6 +166,10 @@ export function extractRuleId(
     const inCriterion = /\b(BR-[A-Z]{0,3}-?\d+|CII-[A-Z]{2}-\d+)\b/i.exec(criterion);
     if (inCriterion?.[1]) return { ruleId: inCriterion[1].toUpperCase(), variant: null };
   }
+
+  // Checked last: a Schematron rule identifier always wins over a generic engine classification.
+  const engineId = engineRuleId(message);
+  if (engineId) return { ruleId: engineId, variant: null };
 
   return { ruleId: null, variant: null };
 }

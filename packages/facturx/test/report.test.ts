@@ -64,8 +64,42 @@ describe('extractRuleId', () => {
   });
 
   it('returns null rather than inventing an identifier', () => {
-    // Most PDF/A findings carry no rule ID; a false one would mislookup the French catalogue.
-    expect(extractRuleId('The file could not be read.', null).ruleId).toBeNull();
+    // A false identifier would mislookup the French catalogue.
+    expect(extractRuleId('Something entirely unexpected happened.', null).ruleId).toBeNull();
+  });
+
+  describe('engine-level findings', () => {
+    // Verbatim from validator 2.24.0. These carry no BR-* identifier but are often the most
+    // directly actionable lines in a report, so they must not fall through unclassified.
+    const ARITHMETIC =
+      'Arithmetical issue:Payable total in XML is 1968.00, but calculated total is 2076.00 with tax basis 1730.00 and with positions 1730.00 = 1250.00 + 390.00 + 90.00';
+    const SCHEMA =
+      "schema validation fails:org.xml.sax.SAXParseException; lineNumber: 96; columnNumber: 34; cvc-complex-type.2.4.a: Invalid content was found starting with element 'DefinedTradeContact'.";
+
+    it('classifies the arithmetic cross-check', () => {
+      expect(extractRuleId(ARITHMETIC, null).ruleId).toBe('ENGINE-ARITHMETIC');
+    });
+
+    it('classifies an XSD schema failure', () => {
+      expect(extractRuleId(SCHEMA, null).ruleId).toBe('ENGINE-SCHEMA');
+    });
+
+    it('lets a Schematron identifier win over engine classification', () => {
+      // A message mentioning PDF/A but carrying a real rule ID must keep the real one.
+      expect(extractRuleId('[BR-CO-10]-Sum of Invoice line net amount. pdfa', null).ruleId).toBe(
+        'BR-CO-10',
+      );
+    });
+
+    it('gives engine findings the engine ruleset and a French explanation', () => {
+      const report = parseMustangReport(
+        buildReport(`<warning>${escapeXml(ARITHMETIC)}</warning>`),
+        10,
+      );
+      const finding = report.findings[0]!;
+      expect(finding.ruleset).toBe('engine');
+      expect(finding.ruleId).toBe('ENGINE-ARITHMETIC');
+    });
   });
 });
 

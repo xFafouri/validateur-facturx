@@ -30,8 +30,13 @@ export type FindingPart = 'pdf' | 'xml' | 'general';
  *   French domestic invoice.
  * - `peppol` - PEPPOL BIS interoperability rules; relevant because PEPPOL eDelivery is the default
  *   transport between platforms.
+ * - `engine` - checks the validation engine performs itself rather than via Schematron: XSD schema
+ *   conformance, PDF/A structure, and its own arithmetic cross-check. These carry no `BR-*`
+ *   identifier but are often the most directly actionable messages in a report, so they must not
+ *   be left to fall through as unclassified.
  */
-export type Ruleset = 'facturx-en16931' | 'cius-fr' | 'xrechnung-de' | 'peppol' | 'other';
+export type Ruleset =
+  'facturx-en16931' | 'cius-fr' | 'xrechnung-de' | 'peppol' | 'engine' | 'other';
 
 export interface ValidationFinding {
   readonly severity: Severity;
