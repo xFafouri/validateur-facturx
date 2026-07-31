@@ -32,18 +32,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The Prisma client is generated code. Without this, anything importing @prisma/client
+      # typechecks against the unpopulated stub and fails on symbols the real client provides.
+      - name: Generate Prisma client
+        run: pnpm --filter @facturx/db generate
+
       # `@facturx/core` must be built before the apps: both consume its dist output.
       - name: Build core
         run: pnpm --filter @facturx/core build
 
       - run: pnpm lint
-      - run: pnpm --filter @facturx/core typecheck
-      - run: pnpm --filter @facturx/db validate
+      - run: pnpm -r typecheck
 
       - name: Unit tests
         # Without the sidecar the integration suite skips itself; that is intentional so this job
         # stays fast. The `integration` job below is what proves the engine contract.
-        run: pnpm --filter @facturx/core test
+        run: pnpm -r test
 
   # The job that would actually catch a regression against the real validation engine.
   integration:
@@ -62,6 +66,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @facturx/db generate
       - run: pnpm --filter @facturx/core build
 
       - name: Build validator sidecar
@@ -110,6 +115,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @facturx/db generate
       - run: pnpm --filter @facturx/core build
       - run: pnpm --filter @facturx/web build
       - run: pnpm --filter @facturx/api build
