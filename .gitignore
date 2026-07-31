@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+target/
+.next/
+out/
+coverage/
+
+# TypeScript incremental build state - machine-specific, changes on every build.
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Prisma
+packages/db/prisma/migrations/dev.db*
+
+# Downloaded official test corpus (fetched by scripts/fetch-samples.sh)
+packages/facturx/test/corpus/vendor/

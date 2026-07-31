@@ -1,0 +1,546 @@
+// Data model for the Factur-X compliance platform.
+//
+// Modelled now, ahead of Phase 1, so the phases in the roadmap slot in without re-architecting.
+// Three constraints shape almost every decision here:
+//
+//   1. TENANT ISOLATION. An accountant tenant holds many client businesses' data. Every
+//      tenant-owned row carries `tenantId` directly rather than relying on a join to reach it,
+//      so a scoping predicate can never be "forgotten" one level down a relation chain.
+//
+//   2. IMMUTABILITY. An invoice is a legal document. Issued invoices and archive entries are
+//      never updated in place; corrections are new documents (an avoir, type code 381). Party
+//      details are snapshotted per invoice rather than referenced, so that later edits to a
+//      customer record cannot retroactively alter what a past invoice says.
+//
+//   3. EXACT MONEY. All amounts are `Decimal` (Postgres NUMERIC), never Float. A cent of
+//      floating-point drift is exactly what makes BR-CO-10 fail.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Lead capture (Phase 0)
+// ---------------------------------------------------------------------------
+
+/// Which persona a signup identifies as. Drives what we build and who we talk to first.
+enum LeadProfile {
+  TPE
+  ACCOUNTANT
+  SOFTWARE_VENDOR
+  OTHER
+}
+
+/// Waitlist signup from the public validator.
+///
+/// The only personal data Phase 0 stores, and the only conversion mechanism it has. Deliberately
+/// minimal: an email, a self-declared persona, and the consent record. **No invoice data and no
+/// validation results are stored here** - the validator promises uploads are analysed and
+/// immediately forgotten, and a lead record that quietly carried invoice contents would make that
+/// promise false.
+///
+/// `consentText` stores the exact wording the user agreed to, not a boolean: under GDPR, proving
+/// consent means proving what was consented to, and that wording changes over time.
+model Lead {
+  id String @id @default(cuid())
+
+  email   String      @unique
+  profile LeadProfile @default(OTHER)
+
+  /// Which page or state the signup came from, e.g. `validator-result-non-conforme`.
+  source String?
+
+  /// Verbatim consent wording shown at the time of signup.
+  consentText String
+  consentedAt DateTime @default(now())
+
+  /// Set when the user asks to be removed; the row is retained only to honour the opt-out.
+  unsubscribedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([profile])
+}
+
+// ---------------------------------------------------------------------------
+// Tenancy and identity
+// ---------------------------------------------------------------------------
+
+/// The account holder. A cabinet comptable is one Tenant owning many ClientOrgs.
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  /// Tenant's own SIREN, when the tenant is itself a business.
+  siren     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  clientOrgs    ClientOrg[]
+  invoices      Invoice[]
+  auditLogs     AuditLog[]
+  archiveEntries ArchiveEntry[]
+  subscription  Subscription?
+
+  @@index([siren])
+}
+
+enum UserRole {
+  OWNER
+  ACCOUNTANT
+  CLIENT_USER
+}
+
+model User {
+  id       String   @id @default(cuid())
+  tenantId String
+  email    String   @unique
+  name     String?
+  role     UserRole @default(ACCOUNTANT)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// When set, this user may only see these client orgs - used for client-user logins.
+  scopedClientOrgs ClientOrgUser[]
+
+  @@index([tenantId])
+}
+
+/// An end business whose invoicing the tenant manages.
+model ClientOrg {
+  id       String @id @default(cuid())
+  tenantId String
+
+  name  String
+  /// 9 digits, checksum-validated on entry.
+  siren String
+  /// 14 digits. Establishment-level; needed for Annuaire routing.
+  siret String?
+  vatNumber String?
+
+  /// Electronic address used for routing (BT-34 for the seller side).
+  eInvoicingAddress String?
+  /// Scheme of the address above, e.g. `0009` for a French SIRET.
+  eInvoicingScheme  String?
+
+  addressLine1 String?
+  addressLine2 String?
+  postcode     String?
+  city         String?
+  countryCode  String  @default("FR")
+
+  /// Emitted profile for this client. Defaults to BASIC; see profiles.ts for the rationale.
+  defaultProfile String @default("BASIC")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  /// Soft-delete: archived invoices must outlive the client record by up to ten years.
+  archivedAt DateTime?
+
+  tenant         Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoices       Invoice[]
+  pdpConnections PdpConnection[]
+  users          ClientOrgUser[]
+  eReports       EReport[]
+
+  @@unique([tenantId, siren])
+  @@index([tenantId])
+  @@index([siren])
+}
+
+/// Join table restricting a client-user to specific client orgs.
+model ClientOrgUser {
+  userId      String
+  clientOrgId String
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientOrg ClientOrg @relation(fields: [clientOrgId], references: [id], onDelete: Cascade)
+
+  @@id([userId, clientOrgId])
+  @@index([clientOrgId])
+}
+
+// ---------------------------------------------------------------------------
+// Invoices
+// ---------------------------------------------------------------------------
+
+enum InvoiceDirection {
+  ISSUED
+  RECEIVED
+}
+
+enum InvoiceState {
+  DRAFT
+  VALIDATED
+  QUEUED
+  TRANSMITTED
+  DELIVERED
+  REJECTED
+  ARCHIVED
+}
+
+/// Party identity as it stood when the invoice was issued.
+///
+/// Snapshotted, not referenced: editing a customer's address must never change what a past
+/// invoice says, because the invoice is the legal record of that transaction.
+model Party {
+  id String @id @default(cuid())
+
+  name        String
+  legalId     String?
+  legalScheme String?
+  vatNumber   String?
+  eAddress    String?
+  eScheme     String?
+
+  addressLine1 String?
+  addressLine2 String?
+  postcode     String?
+  city         String?
+  countryCode  String?
+
+  createdAt DateTime @default(now())
+
+  invoicesAsSeller Invoice[] @relation("SellerParty")
+  invoicesAsBuyer  Invoice[] @relation("BuyerParty")
+}
+
+model Invoice {
+  id          String @id @default(cuid())
+  tenantId    String
+  clientOrgId String
+
+  direction InvoiceDirection
+  state     InvoiceState     @default(DRAFT)
+
+  /// BT-1. Unique per issuing client org; the CGI requires unbroken sequential numbering.
+  invoiceNumber String
+  /// BT-3. 380 invoice, 381 credit note.
+  typeCode      String   @default("380")
+  /// BT-2.
+  issueDate     DateTime @db.Date
+  /// BT-9.
+  dueDate       DateTime? @db.Date
+  /// BT-5.
+  currency      String   @default("EUR")
+  /// BT-10.
+  buyerReference String?
+
+  /// Factur-X profile actually emitted.
+  profile String @default("BASIC")
+
+  sellerPartyId String
+  buyerPartyId  String
+
+  // Totals. NUMERIC, never Float - see the header note.
+  /// BT-106
+  lineTotalAmount     Decimal @db.Decimal(19, 4)
+  /// BT-107
+  allowanceTotalAmount Decimal @default(0) @db.Decimal(19, 4)
+  /// BT-108
+  chargeTotalAmount   Decimal @default(0) @db.Decimal(19, 4)
+  /// BT-109
+  taxBasisTotalAmount Decimal @db.Decimal(19, 4)
+  /// BT-110
+  taxTotalAmount      Decimal @db.Decimal(19, 4)
+  /// BT-112
+  grandTotalAmount    Decimal @db.Decimal(19, 4)
+  /// BT-113
+  prepaidAmount       Decimal @default(0) @db.Decimal(19, 4)
+  /// BT-115
+  duePayableAmount    Decimal @db.Decimal(19, 4)
+
+  /// Last validation verdict, cached for list views.
+  lastValidationValid Boolean?
+  lastValidatedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clientOrg ClientOrg @relation(fields: [clientOrgId], references: [id], onDelete: Cascade)
+  seller    Party     @relation("SellerParty", fields: [sellerPartyId], references: [id])
+  buyer     Party     @relation("BuyerParty", fields: [buyerPartyId], references: [id])
+
+  lines            InvoiceLine[]
+  taxBreakdown     TaxBreakdown[]
+  lifecycleStatuses LifecycleStatus[]
+  archiveEntries   ArchiveEntry[]
+  transmissions    Transmission[]
+
+  /// An issuer may not reuse a number; enforced per client org rather than per tenant, since
+  /// each client business has its own sequence.
+  @@unique([clientOrgId, direction, invoiceNumber])
+  @@index([tenantId, state])
+  @@index([clientOrgId, issueDate])
+}
+
+model InvoiceLine {
+  id        String @id @default(cuid())
+  invoiceId String
+
+  /// BT-126
+  lineId      String
+  /// BT-153
+  name        String
+  /// BT-154
+  description String?
+  /// BT-129
+  quantity    Decimal @db.Decimal(19, 4)
+  /// BT-130, UN/ECE Rec 20.
+  unitCode    String  @default("C62")
+  /// BT-146
+  netUnitPrice Decimal @db.Decimal(19, 4)
+  /// BT-131. These must sum to the invoice's BT-106 - the BR-CO-10 rule.
+  netAmount    Decimal @db.Decimal(19, 4)
+  /// BT-151, UNTDID 5305.
+  vatCategoryCode String @default("S")
+  /// BT-152
+  vatRatePercent  Decimal @db.Decimal(6, 2)
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, lineId])
+  @@index([invoiceId])
+}
+
+/// VAT subtotal per rate (BG-23). Required by EN 16931 even for exempt invoices.
+model TaxBreakdown {
+  id        String @id @default(cuid())
+  invoiceId String
+
+  /// BT-116
+  basisAmount     Decimal @db.Decimal(19, 4)
+  /// BT-117
+  calculatedAmount Decimal @db.Decimal(19, 4)
+  /// BT-118
+  categoryCode    String
+  /// BT-119
+  ratePercent     Decimal @db.Decimal(6, 2)
+  /// BT-120
+  exemptionReason String?
+  /// BT-121
+  exemptionCode   String?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@unique([invoiceId, categoryCode, ratePercent])
+  @@index([invoiceId])
+}
+
+// ---------------------------------------------------------------------------
+// Platform integration and lifecycle
+// ---------------------------------------------------------------------------
+
+/// Where a status came from. Statuses feed VAT reporting, so provenance is not optional.
+enum StatusSource {
+  INTERNAL
+  PA
+  PPF
+}
+
+/// Lifecycle status (transmission and business processing families).
+///
+/// Append-only: a status history is evidence. Superseded statuses stay.
+model LifecycleStatus {
+  id        String @id @default(cuid())
+  invoiceId String
+
+  /// DGFiP status code, e.g. deposited, received, rejected, approved.
+  code      String
+  label     String?
+  source    StatusSource
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+  /// Raw payload from the platform, kept verbatim for dispute resolution.
+  payload   Json?
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId, occurredAt])
+}
+
+/// Credentials and routing for one client org's certified platform (PA).
+model PdpConnection {
+  id          String @id @default(cuid())
+  clientOrgId String
+
+  /// Adapter key selecting the PdpProvider implementation.
+  provider String
+  /// Human label shown in the UI.
+  label    String?
+
+  apiBaseUrl String?
+  /// Encrypted at the application layer before it reaches the database; never stored in clear.
+  credentialsEncrypted Bytes?
+  /// PEPPOL participant identifier, when the transport is PEPPOL eDelivery.
+  peppolAddress String?
+
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientOrg     ClientOrg      @relation(fields: [clientOrgId], references: [id], onDelete: Cascade)
+  transmissions Transmission[]
+
+  @@index([clientOrgId])
+}
+
+enum TransmissionState {
+  PENDING
+  SENT
+  ACKNOWLEDGED
+  FAILED
+}
+
+/// One attempt to hand an invoice to a platform.
+///
+/// Separate from Invoice because transmission is retried: the invoice has one state, but it may
+/// have many attempts, and the failure history matters when a client disputes delivery.
+model Transmission {
+  id              String @id @default(cuid())
+  invoiceId       String
+  pdpConnectionId String
+
+  state    TransmissionState @default(PENDING)
+  /// Deduplication key sent to the platform so a retry cannot produce a duplicate invoice.
+  idempotencyKey String  @unique
+  attempt        Int     @default(1)
+  /// Identifier the platform assigned, once known.
+  externalId     String?
+  lastError      String?
+
+  createdAt   DateTime  @default(now())
+  sentAt      DateTime?
+  acknowledgedAt DateTime?
+
+  invoice       Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  pdpConnection PdpConnection @relation(fields: [pdpConnectionId], references: [id])
+
+  @@index([invoiceId])
+  @@index([state])
+}
+
+// ---------------------------------------------------------------------------
+// Archiving and audit
+// ---------------------------------------------------------------------------
+
+/// Immutable stored artifact.
+///
+/// Content-addressed by SHA-256 so integrity is provable, and never updated - a new version is a
+/// new row. `retentionUntil` encodes the statutory retention period; the exact duration must be
+/// confirmed against DGFiP guidance before go-live.
+model ArchiveEntry {
+  id        String  @id @default(cuid())
+  tenantId  String
+  invoiceId String?
+
+  /// SHA-256 of the stored bytes, hex-encoded.
+  contentHash String
+  /// Object-storage key. Storage must be write-once.
+  storageKey  String
+  mimeType    String
+  sizeBytes   Int
+  /// `facturx-pdf`, `cii-xml`, ...
+  artifactKind String
+
+  sealedAt       DateTime @default(now())
+  retentionUntil DateTime
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoice Invoice? @relation(fields: [invoiceId], references: [id])
+
+  @@unique([tenantId, contentHash])
+  @@index([invoiceId])
+  @@index([retentionUntil])
+}
+
+/// Append-only record of every material action.
+///
+/// No `updatedAt`, and nothing here is ever mutated: an audit log that can be edited is not an
+/// audit log. Writes should be enforced insert-only at the database role level.
+model AuditLog {
+  id       String @id @default(cuid())
+  tenantId String
+
+  /// Who acted. Null for system/worker actions.
+  userId   String?
+  /// e.g. `invoice.issued`, `invoice.transmitted`, `client_org.created`.
+  action   String
+  /// Entity type and id the action concerned.
+  entityType String
+  entityId   String
+
+  /// Structured detail; must not contain secrets.
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+
+  occurredAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, occurredAt])
+  @@index([entityType, entityId])
+}
+
+// ---------------------------------------------------------------------------
+// e-reporting (Phase 4) and billing
+// ---------------------------------------------------------------------------
+
+enum EReportKind {
+  B2C
+  CROSS_BORDER
+  PAYMENT
+}
+
+/// Transaction data reported to the tax authority outside the B2B invoice flow.
+model EReport {
+  id          String @id @default(cuid())
+  clientOrgId String
+
+  kind        EReportKind
+  periodStart DateTime @db.Date
+  periodEnd   DateTime @db.Date
+
+  totalAmount Decimal @db.Decimal(19, 4)
+  taxAmount   Decimal @db.Decimal(19, 4)
+  currency    String  @default("EUR")
+
+  submittedAt DateTime?
+  payload     Json?
+
+  createdAt DateTime @default(now())
+
+  clientOrg ClientOrg @relation(fields: [clientOrgId], references: [id], onDelete: Cascade)
+
+  @@index([clientOrgId, periodStart])
+}
+
+model Subscription {
+  id       String @id @default(cuid())
+  tenantId String @unique
+
+  /// Stripe identifiers only. No card data ever touches this system.
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  plan                 String  @default("free")
+  status               String  @default("active")
+  /// Managed-client count for per-seat billing of the accountant plan.
+  seatCount            Int     @default(0)
+
+  currentPeriodEnd DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}

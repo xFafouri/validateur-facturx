@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>fr.facturx</groupId>
+  <artifactId>validator-sidecar</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>Factur-X Validator Sidecar</name>
+  <description>
+    Thin HTTP wrapper around Mustangproject's ZUGFeRDValidator. Exposes XSD + Schematron
+    (EN 16931) + PDF/A-3 validation over HTTP so the TypeScript stack can treat validation
+    as a service. Returns Mustang's native XML report verbatim; all interpretation and the
+    French-language rule explanations live in packages/facturx.
+  </description>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <!-- Mustangproject versions its validator artifact independently of the library. -->
+    <mustang.validator.version>2.24.0</mustang.validator.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.mustangproject</groupId>
+      <artifactId>validator</artifactId>
+      <version>${mustang.validator.version}</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>validator-sidecar</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>fr.facturx.validator.ValidatorServer</mainClass>
+                </transformer>
+                <!-- Mustang + dom4j ship service descriptors that must be merged, not overwritten. -->
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

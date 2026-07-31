@@ -1,0 +1,7 @@
+node_modules
+dist
+.next
+target
+pnpm-lock.yaml
+packages/facturx/test/corpus
+services/validator/src/main/resources

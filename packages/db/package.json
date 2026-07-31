@@ -1,0 +1,22 @@
+{
+  "name": "@facturx/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Prisma schema and client for the Factur-X platform.",
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "studio": "prisma studio",
+    "validate": "prisma validate",
+    "_comment": "typecheck supplies a placeholder DATABASE_URL: Prisma resolves datasource env vars even when only parsing the schema, and schema validity must not depend on a database being configured.",
+    "typecheck": "DATABASE_URL=${DATABASE_URL:-postgresql://placeholder:placeholder@localhost:5432/placeholder} prisma validate",
+    "test": "echo \"no db tests yet\" && exit 0"
+  },
+  "devDependencies": {
+    "prisma": "^6.2.1"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.2.1"
+  }
+}

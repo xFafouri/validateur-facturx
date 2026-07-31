@@ -1,0 +1,16 @@
+# Root build context (images are built from the workspace root).
+**/node_modules
+**/.next
+**/dist
+**/target
+**/coverage
+
+.git
+.github
+*.log
+.env
+.env.*
+!.env.example
+
+# Fetched test corpus - large and never needed in an image.
+packages/facturx/test/corpus/vendor

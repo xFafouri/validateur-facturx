@@ -1,0 +1,68 @@
+# Local development stack.
+#
+# `docker compose up -d validator` alone is enough for Phase 0: the public validator needs only the
+# Mustangproject sidecar. Postgres and Redis are declared now because Phases 1-2 need them, and
+# because it is easier to keep one compose file honest than to rediscover the topology later.
+#
+# Not a production deployment. Production must run in the EU (French tax data is in scope for
+# GDPR and for the archiving obligation), with real secrets management and TLS termination.
+
+name: facturx
+
+services:
+  # The correctness-critical component: XSD + EN 16931 Schematron + DGFiP Flux 2 + PDF/A-3.
+  validator:
+    build:
+      context: ./services/validator
+    image: facturx-validator:local
+    environment:
+      PORT: 8081
+    ports:
+      - '127.0.0.1:8081:8081'
+    healthcheck:
+      # Readiness, not just liveness: the JVM warms up Schematron compilation at boot and should
+      # not receive traffic until it has.
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8081/health | grep -q ''"warmedUp":true''']
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: facturx
+      POSTGRES_PASSWORD: facturx_dev_only
+      POSTGRES_DB: facturx
+      # Deterministic collation, so ordering does not differ between machines.
+      LANG: C.UTF-8
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U facturx -d facturx']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Queue backing for BullMQ: platform transmission, status polling, archive sealing.
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  PNPM_VERSION: '9.15.0'
+
+jobs:
+  # Fast feedback: unit tests need neither Docker nor the network.
+  unit:
+    name: Typecheck, lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `@facturx/core` must be built before the apps: both consume its dist output.
+      - name: Build core
+        run: pnpm --filter @facturx/core build
+
+      - run: pnpm lint
+      - run: pnpm --filter @facturx/core typecheck
+      - run: pnpm --filter @facturx/db validate
+
+      - name: Unit tests
+        # Without the sidecar the integration suite skips itself; that is intentional so this job
+        # stays fast. The `integration` job below is what proves the engine contract.
+        run: pnpm --filter @facturx/core test
+
+  # The job that would actually catch a regression against the real validation engine.
+  integration:
+    name: Integration against Mustangproject sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @facturx/core build
+
+      - name: Build validator sidecar
+        run: docker build -t facturx-validator:ci services/validator
+
+      - name: Start sidecar
+        run: |
+          docker run -d --name validator -p 8081:8081 facturx-validator:ci
+          # Wait for warm-up, not merely for the port to open: the first Schematron compilation
+          # takes seconds, and tests started too early would time out rather than fail honestly.
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:8081/health | grep -q '"warmedUp":true'; then
+              echo "sidecar ready after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "sidecar failed to warm up"; docker logs validator; exit 1
+
+      - name: Fetch third-party sample corpus
+        # Golden-file tests run against invoices produced by an independent implementation.
+        # Non-fatal: the suite skips absent samples rather than failing on a network hiccup.
+        run: pnpm --filter @facturx/core fetch-samples || true
+
+      - name: Integration and golden-file tests
+        env:
+          VALIDATOR_URL: http://127.0.0.1:8081
+        run: pnpm --filter @facturx/core test
+
+      - name: Sidecar logs on failure
+        if: failure()
+        run: docker logs validator
+
+  build:
+    name: Build applications
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @facturx/core build
+      - run: pnpm --filter @facturx/web build
+      - run: pnpm --filter @facturx/api build

@@ -1,0 +1,64 @@
+# Production topology for Phase 0.
+#
+# Run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# ## Hosting requirement
+#
+# This MUST run in the EU. The service processes French invoices, which carry commercial and
+# personal data in scope for GDPR, and the mandate's archiving obligation assumes EU residency.
+# That is a compliance constraint, not a latency preference.
+#
+# ## Not included on purpose
+#
+# TLS termination and a reverse proxy. Put Caddy, nginx or the host's load balancer in front, and
+# make sure it sets `X-Forwarded-For` - the rate limiter keys on it, and without a proxy setting
+# it every visitor shares one bucket. If the app is ever exposed directly, set `TRUST_PROXY=false`
+# so a client cannot spoof that header and bypass the limit.
+
+services:
+  validator:
+    # Never published publicly: only the web app talks to it, and it accepts arbitrary uploads.
+    ports: !override []
+    restart: always
+    deploy:
+      resources:
+        limits:
+          # Schematron evaluation is memory-hungry; a cap keeps one bad upload from taking the
+          # host down with it.
+          memory: 1g
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL:?set NEXT_PUBLIC_SITE_URL}
+        # Must stay false anywhere that is not production, or staging will compete with production
+        # in search results.
+        NEXT_PUBLIC_ALLOW_INDEXING: ${NEXT_PUBLIC_ALLOW_INDEXING:-false}
+    image: facturx-web:latest
+    environment:
+      NODE_ENV: production
+      VALIDATOR_URL: http://validator:8081
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      # Behind a reverse proxy by default; see the note above.
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      validator:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: always
+
+  postgres:
+    ports: !override []
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    restart: always
+
+  redis:
+    ports: !override []
+    restart: always
