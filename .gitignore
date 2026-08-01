@@ -30,3 +30,6 @@ packages/facturx/test/corpus/vendor/
 
 # Generated demo invoices (rebuild: pnpm --filter @facturx/core demo)
 packages/facturx/test/corpus/demo/
+
+# Local artifact archive (development driver of the ArtifactStore).
+.archive/

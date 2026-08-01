@@ -38,7 +38,9 @@ services:
       # Deterministic collation, so ordering does not differ between machines.
       LANG: C.UTF-8
     ports:
-      - '127.0.0.1:5432:5432'
+      # Overridable: 5432 is frequently already bound by another project's Postgres, and a bind
+      # failure here stops the whole stack. Set POSTGRES_PORT in .env to move it.
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

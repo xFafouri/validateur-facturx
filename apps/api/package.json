@@ -2,13 +2,14 @@
   "name": "@facturx/api",
   "version": "0.1.0",
   "private": true,
-  "description": "NestJS API. Module skeleton for Phases 1-3; only the validation module is implemented.",
+  "description": "NestJS API. Validation (Phase 0), invoicing and archiving (Phase 1); PDP and billing are skeletons.",
   "scripts": {
     "build": "nest build",
     "dev": "nest start --watch",
     "start": "node dist/main.js",
-    "typecheck": "tsc --noEmit",
-    "test": "echo \"no api tests yet\" && exit 0"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@facturx/core": "workspace:*",
@@ -19,12 +20,15 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "@facturx/db": "workspace:*",
+    "@prisma/client": "^6.2.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.2",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
   }
 }

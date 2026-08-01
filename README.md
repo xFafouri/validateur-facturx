@@ -4,11 +4,12 @@ A _Solution Compatible_ (SC) for France's 2026–2027 B2B e-invoicing mandate, a
 underserved long tail: micro-businesses, accountants managing many small clients, and niche
 software with no native e-invoicing.
 
-**Status: Phase 0 complete; Phase 1 generation complete.** The free public validator runs, backed by
-a real Schematron engine, with every rule explained in French. Invoices can now also be _generated_
-— PDF/A-3 with embedded `factur-x.xml` — and the engine that judges third-party uploads accepts our
-own output with zero findings. Persistence, authentication and archiving are not built; see
-[Roadmap](#roadmap).
+**Status: Phase 0 complete; Phase 1 complete except for authentication and a UI.** The free public
+validator runs, backed by a real Schematron engine, with every rule explained in French. Invoices
+are also _generated_ — PDF/A-3 with embedded `factur-x.xml` — self-validated against that same
+engine, persisted, and sealed into an immutable content-addressed archive. What is missing is the
+way in: there is no authentication layer and no invoicing UI, so issuance is reachable from code and
+tests only. See [Roadmap](#roadmap).
 
 > **Scope boundary.** This is a _Solution Compatible_, **not** a _Plateforme Agréée_ (PA). It
 > creates and validates invoices and connects to an existing certified platform; it is not
@@ -35,8 +36,17 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 171 tests
+pnpm verify   # build + format check + typecheck + 199 tests
 ```
+
+The invoicing and archiving suites need Postgres as well, and skip without it:
+
+```bash
+docker compose up -d postgres
+pnpm --filter @facturx/db migrate:deploy
+```
+
+`POSTGRES_PORT=5433` (in `.env`, matching `DATABASE_URL`) if another project already binds 5432.
 
 Generating an invoice needs an embeddable font, because PDF/A forbids the standard 14 PDF fonts.
 `resolveSystemFonts()` picks up DejaVu or Liberation from the host; a container that generates
@@ -50,9 +60,9 @@ invoices must install one (`fonts-dejavu-core`) or point `FACTURX_FONT_REGULAR` 
 | Path                 | What it is                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `apps/web`           | Next.js. Public French validator + SEO landing page. **Phase 0 — built.**                                     |
-| `apps/api`           | NestJS. Module skeleton; only validation is implemented.                                                      |
+| `apps/api`           | NestJS. Validation, invoicing and archiving implemented; PDP and billing are skeletons.                       |
 | `packages/facturx`   | Core: CII parsing/serialising, PDF/A-3 extraction and assembly, validation, French rule catalogue. **Built.** |
-| `packages/db`        | Prisma schema for the full data model. Modelled, not migrated.                                                |
+| `packages/db`        | Prisma schema for the full data model. **Migrated and in use.**                                               |
 | `services/validator` | Java sidecar wrapping Mustangproject. **Built.**                                                              |
 
 ### Why a Java sidecar
@@ -124,6 +134,29 @@ agree with one another: `E`, `AE`, `K` and `G` each require an exemption reason,
 (BR-IC-12). Assuming `Z` behaved like the others produced documents rejected for the very field the
 generator was being careful about. The integration suite now validates one invoice per category.
 
+### Issuing and archiving
+
+`IssuanceService` ([`apps/api/src/invoicing`](apps/api/src/invoicing/issuance.service.ts)) runs one
+ordered path: generate, self-validate against the engine, then persist and seal. Nothing reaches the
+database until the engine has accepted the document, so the invoice table cannot come to hold
+records of invoices that a certified platform would reject. **If the engine is unreachable, the
+issuance is refused** rather than archived unverified — an invoice is a legal act, and sealing one
+into a ten-year archive without having checked it is worse than making the user wait.
+
+Three properties are enforced rather than trusted:
+
+- **The seller is read from the client org**, never from the request payload, so a caller cannot
+  issue an invoice claiming to be a business it does not belong to.
+- **Tenant scoping is a predicate on every query**, not a filter applied after the fact.
+- **Amounts cross into Postgres as exact decimal strings.** `Decimal` → `number` → `NUMERIC` would
+  reintroduce the drift the whole pipeline exists to avoid, one cast from the finish line.
+
+The archive is content-addressed by SHA-256 and write-once: sealing identical bytes twice is a
+no-op (which is what makes a retried issuance safe), and reading an artifact back re-hashes it and
+refuses to return bytes that no longer match what was sealed. The store sits behind an
+`ArtifactStore` port for the same reason as `PdpProvider` — the filesystem driver is for
+development, and production must use EU object storage with versioning and object-lock.
+
 **The sRGB ICC profile is constructed, not shipped.**
 [`icc.ts`](packages/facturx/src/generate/icc.ts) builds a valid ICC v2 matrix/TRC profile — header,
 tag table, sampled sRGB tone curve — because PDF/A requires an OutputIntent and the alternatives
@@ -168,7 +201,9 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**171 tests**, including 19 integration tests against the live engine. The integration suite skips
+**199 tests**, including 19 core integration tests and 10 issuance tests against the live engine —
+the latter also against a real Postgres, because a mocked client would happily accept a `number`
+where the schema wants `NUMERIC` and prove nothing about the cent that matters. The integration suite skips
 itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 
 ---
@@ -177,11 +212,13 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 
 - **Phase 0 — free public validator.** ✅ Done. Lead generation, and it forced validation
   correctness first.
-- **Phase 1 — generate + validate + archive.** Generation ✅ done: `BASIC`-profile CII, PDF/A-3
-  assembly, pre-flight checks, self-validation against the engine
-  ([`src/generate`](packages/facturx/src/generate)). Still to build: persistence behind the modelled
-  Prisma schema, authentication and tenancy, and immutable archiving. No invoicing UI or API surface
-  is exposed yet — the generator is library code with no route in front of it.
+- **Phase 1 — generate + validate + archive.** ✅ Generation (`BASIC`-profile CII, PDF/A-3 assembly,
+  pre-flight checks — [`src/generate`](packages/facturx/src/generate)), self-validation against the
+  engine, tenant-scoped persistence, and immutable content-addressed archiving
+  ([`apps/api/src/invoicing`](apps/api/src/invoicing), [`archiving`](apps/api/src/archiving)).
+  **Still to build: authentication and the invoicing UI.** Issuance is deliberately left without an
+  HTTP route until there is an auth layer to scope it by — an unauthenticated endpoint that writes
+  into a tenant's archive is the wrong seam to leave open.
 - **Phase 2 — platform connection.** Transmit, receive, ingest lifecycle statuses behind
   `PdpProvider`. Queue-based, idempotent.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
@@ -199,7 +236,7 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 ### Still open
 
 Which certified platform to integrate first; hosting region and topology (**must be EU** — French
-tax data); auth provider; Stripe price points.
+tax data) and with it the production object store; auth provider; Stripe price points.
 
 ---
 

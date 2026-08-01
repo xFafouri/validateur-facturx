@@ -1,0 +1,13 @@
+{
+  // The tests run under vitest, which is ESM, while `src` is compiled to CommonJS for Nest.
+  // Type-checking them with the CommonJS config rejects top-level `await` - which the suites need,
+  // because `describe.skipIf` is evaluated during collection, before any hook could set a flag.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["**/*.ts", "../src/**/*.ts"]
+}
