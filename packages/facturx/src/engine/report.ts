@@ -263,6 +263,89 @@ function collectFindings(node: unknown, part: FindingPart, out: ValidationFindin
   }
 }
 
+/**
+ * Extracts the PDF/A failures from the `<pdf>` element.
+ *
+ * veraPDF's verdict is not reported as `<error>` elements like the Schematron findings. It arrives
+ * as the Java `toString()` of its result object, dumped as text inside `<pdf>`:
+ *
+ * ```
+ * ValidationResult [flavour=3b, totalAssertions=25120, assertions=[TestAssertion [ruleId=RuleId
+ * [specification=ISO 19005-3:2012, clause=6.1.3, testNumber=1], status=failed, message=The file
+ * trailer dictionary shall contain the ID keyword…, errorMessage=Missing or empty ID…]],
+ * isCompliant=false]
+ * ```
+ *
+ * Left unparsed it is invisible to every consumer, which is how a file that fails PDF/A validation
+ * came to be reported as compliant. The clause reference is worth keeping: it is the difference
+ * between "your PDF is wrong" and a defect the user's PDF vendor can act on.
+ */
+const ASSERTION_PATTERN =
+  /TestAssertion \[ruleId=RuleId \[specification=([^,]+), clause=([^,\]]+)(?:, testNumber=(\d+))?\], status=(\w+), message=([\s\S]*?)(?:, location=|, errorMessage=)/g;
+
+const ERROR_MESSAGE_PATTERN = /errorMessage=([\s\S]*?)\]\s*(?:,|\]|$)/;
+
+/** Beyond a handful, the list stops being a diagnosis and becomes a wall of text. */
+const MAX_PDFA_FINDINGS = 10;
+
+export function parsePdfaFindings(pdfText: string): ValidationFinding[] {
+  if (!pdfText || !/ValidationResult/.test(pdfText)) return [];
+  if (/isCompliant=true/.test(pdfText)) return [];
+
+  const findings: ValidationFinding[] = [];
+  const seen = new Set<string>();
+
+  for (const match of pdfText.matchAll(ASSERTION_PATTERN)) {
+    const [, specification, clause, testNumber, status, message] = match;
+    if (status !== 'failed') continue;
+
+    // veraPDF repeats one broken construct once per occurrence; the clause is the actual defect.
+    const key = `${clause}#${testNumber ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const detail = ERROR_MESSAGE_PATTERN.exec(pdfText.slice(match.index))?.[1]?.trim();
+    const text = [message?.trim(), detail].filter(Boolean).join(' — ');
+
+    findings.push({
+      severity: 'error',
+      part: 'pdf',
+      ruleId: 'ENGINE-PDFA',
+      ruleVariant: `${specification?.trim()} ${clause?.trim()}`,
+      ruleset: 'engine',
+      message: `PDF/A (${specification?.trim()}, clause ${clause?.trim()}) : ${text}`,
+      rawMessage: match[0],
+      location: null,
+      criterion: null,
+      sourcePath: null,
+      section: null,
+    });
+
+    if (findings.length >= MAX_PDFA_FINDINGS) break;
+  }
+
+  // A file can be non-compliant with the detail unparseable - a veraPDF version whose formatting
+  // differs, say. Reporting nothing then would reintroduce exactly the silence this fixes.
+  if (findings.length === 0) {
+    findings.push({
+      severity: 'error',
+      part: 'pdf',
+      ruleId: 'ENGINE-PDFA',
+      ruleVariant: null,
+      ruleset: 'engine',
+      message:
+        "Le fichier PDF n'est pas conforme au format PDF/A-3 exigé par Factur-X. Le détail n'a pas pu être extrait du rapport du moteur de validation.",
+      rawMessage: pdfText.slice(0, 500),
+      location: null,
+      criterion: null,
+      sourcePath: null,
+      section: null,
+    });
+  }
+
+  return findings;
+}
+
 function statusOf(node: unknown): string | null {
   if (node === null || typeof node !== 'object') return null;
   const summary = (node as XmlNode).summary;
@@ -357,6 +440,12 @@ export function parseMustangReport(rawReport: string, durationMs: number | null)
 
   const pdfStatus =
     pdfNode === undefined ? null : statusOf(Array.isArray(pdfNode) ? pdfNode[0] : pdfNode);
+
+  // veraPDF's verdict lives in the element's own text, so it is collected separately from the
+  // Schematron messages the recursive walk picks up.
+  if (pdfNode !== undefined && pdfStatus !== 'valid') {
+    findings.push(...parsePdfaFindings(textOf(Array.isArray(pdfNode) ? pdfNode[0] : pdfNode)));
+  }
   const xmlStatus =
     xmlNode === undefined ? null : statusOf(Array.isArray(xmlNode) ? xmlNode[0] : xmlNode);
 

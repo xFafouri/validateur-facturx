@@ -103,6 +103,77 @@ describe('extractRuleId', () => {
   });
 });
 
+/**
+ * The exact `<pdf>` payload the engine returned for a generated invoice that was missing the
+ * trailer identifier. Captured verbatim from validator v2.24.0, because the format is a Java
+ * `toString()` dump and no specification pins it - a paraphrase would not prove we can read the
+ * real thing.
+ */
+const VERAPDF_FAILURE =
+  'ValidationResult [flavour=3b, totalAssertions=25120, assertions=[TestAssertion ' +
+  '[ruleId=RuleId [specification=ISO 19005-3:2012, clause=6.1.3, testNumber=1], status=failed, ' +
+  'message=The file trailer dictionary shall contain the ID keyword whose value shall be File ' +
+  'Identifiers as defined in ISO 32000-1:2008, 14.4, location=Location [level=CosDocument, ' +
+  'context=root], locationContext=null, errorMessage=Missing or empty ID in the document ' +
+  'trailer]], isCompliant=false]';
+
+/** Mirrors a report for a PDF upload: veraPDF's verdict is text inside `<pdf>`, not `<error>`s. */
+function buildPdfReport(pdfBody: string, pdfStatus: string, overallStatus = 'valid'): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<validation filename="facture.pdf" datetime="2026-08-01 13:50:01">
+  <pdf>${escapeXml(pdfBody)}
+    <info><signature>unknown</signature></info>
+    <summary status="${pdfStatus}"/>
+  </pdf>
+  <xml>
+    <info>
+      <profile>urn:cen.eu:en16931:2017#compliant#urn:factur-x.eu:1p0:basic</profile>
+      <rules><fired>21</fired><failed>0</failed></rules>
+    </info>
+    <messages></messages>
+    <summary status="valid"/>
+  </xml>
+  <messages></messages>
+  <summary status="${overallStatus}"/>
+</validation>`;
+}
+
+describe('PDF/A findings', () => {
+  it('reports a PDF/A failure the engine buries in element text', () => {
+    const report = parseMustangReport(buildPdfReport(VERAPDF_FAILURE, 'invalid'), 40);
+
+    expect(report.summary.pdf).toBe('invalid');
+    const pdfa = report.findings.filter((f) => f.ruleId === 'ENGINE-PDFA');
+    expect(pdfa).toHaveLength(1);
+    expect(pdfa[0]!.severity).toBe('error');
+    expect(pdfa[0]!.part).toBe('pdf');
+    // The clause is what makes the finding actionable for whoever produced the PDF.
+    expect(pdfa[0]!.message).toContain('6.1.3');
+    expect(pdfa[0]!.message).toContain('trailer');
+  });
+
+  it('stays silent when the PDF is compliant', () => {
+    const report = parseMustangReport(
+      buildPdfReport('ValidationResult [flavour=3b, assertions=[], isCompliant=true]', 'valid'),
+      40,
+    );
+
+    expect(report.summary.pdf).toBe('valid');
+    expect(report.findings.filter((f) => f.ruleId === 'ENGINE-PDFA')).toHaveLength(0);
+  });
+
+  it('still reports non-compliance when the detail cannot be parsed', () => {
+    const report = parseMustangReport(
+      buildPdfReport('ValidationResult [some future format], isCompliant=false', 'invalid'),
+      40,
+    );
+
+    const pdfa = report.findings.filter((f) => f.ruleId === 'ENGINE-PDFA');
+    expect(pdfa).toHaveLength(1);
+    expect(pdfa[0]!.severity).toBe('error');
+  });
+});
+
 /** Mirrors the real envelope: messages nested inside <xml>, summaries at two levels. */
 function buildReport(body: string, status = 'invalid'): string {
   return `<?xml version="1.0" encoding="UTF-8"?>

@@ -4,9 +4,11 @@ A _Solution Compatible_ (SC) for France's 2026–2027 B2B e-invoicing mandate, a
 underserved long tail: micro-businesses, accountants managing many small clients, and niche
 software with no native e-invoicing.
 
-**Status: Phase 0 complete and working end to end.** The free public validator runs, backed by a
-real Schematron engine, with every rule explained in French. Later phases are scaffolded but not
-implemented — see [Roadmap](#roadmap).
+**Status: Phase 0 complete; Phase 1 generation complete.** The free public validator runs, backed by
+a real Schematron engine, with every rule explained in French. Invoices can now also be _generated_
+— PDF/A-3 with embedded `factur-x.xml` — and the engine that judges third-party uploads accepts our
+own output with zero findings. Persistence, authentication and archiving are not built; see
+[Roadmap](#roadmap).
 
 > **Scope boundary.** This is a _Solution Compatible_, **not** a _Plateforme Agréée_ (PA). It
 > creates and validates invoices and connects to an existing certified platform; it is not
@@ -33,20 +35,25 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 107 tests
+pnpm verify   # build + format check + typecheck + 171 tests
 ```
+
+Generating an invoice needs an embeddable font, because PDF/A forbids the standard 14 PDF fonts.
+`resolveSystemFonts()` picks up DejaVu or Liberation from the host; a container that generates
+invoices must install one (`fonts-dejavu-core`) or point `FACTURX_FONT_REGULAR` /
+`FACTURX_FONT_BOLD` at a font file.
 
 ---
 
 ## Layout
 
-| Path                 | What it is                                                                           |
-| -------------------- | ------------------------------------------------------------------------------------ |
-| `apps/web`           | Next.js. Public French validator + SEO landing page. **Phase 0 — built.**            |
-| `apps/api`           | NestJS. Module skeleton; only validation is implemented.                             |
-| `packages/facturx`   | Core: CII parsing, PDF/A-3 extraction, validation, French rule catalogue. **Built.** |
-| `packages/db`        | Prisma schema for the full data model. Modelled, not migrated.                       |
-| `services/validator` | Java sidecar wrapping Mustangproject. **Built.**                                     |
+| Path                 | What it is                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `apps/web`           | Next.js. Public French validator + SEO landing page. **Phase 0 — built.**                                     |
+| `apps/api`           | NestJS. Module skeleton; only validation is implemented.                                                      |
+| `packages/facturx`   | Core: CII parsing/serialising, PDF/A-3 extraction and assembly, validation, French rule catalogue. **Built.** |
+| `packages/db`        | Prisma schema for the full data model. Modelled, not migrated.                                                |
+| `services/validator` | Java sidecar wrapping Mustangproject. **Built.**                                                              |
 
 ### Why a Java sidecar
 
@@ -91,6 +98,41 @@ document is perfectly valid.
 
 ---
 
+## Generation
+
+A draft invoice carries lines, rates and parties — and **no totals**. Every monetary total on the
+emitted document is derived from the lines
+([`compute.ts`](packages/facturx/src/generate/compute.ts)). `BR-CO-10` is the most common rejection
+in the wild precisely because senders carry a total some earlier system computed separately; a total
+that cannot be supplied cannot disagree. The same computed values render both the XML and the
+printed page, so the two renditions of one invoice cannot drift apart.
+
+Rounding follows EN 16931's order: each line is rounded to the cent _before_ being summed, because
+BT-131 is a 2-decimal amount and the validator checks a sum of rounded values. Summing unrounded
+products and rounding at the end differs on roughly one invoice in fifty — and that invoice is
+rejected.
+
+**Checks run before generation, not after.** A draft is refused with every problem listed at once,
+in French, against the field the user is editing: a missing exemption reason, a VAT number whose key
+does not match its SIREN, an IBAN that fails its check digits (valid per the standard, but the
+invoice never gets paid). Emitting a document we already know a validator will reject is the failure
+this product exists to prevent.
+
+**Each VAT category is checked against the engine, not against memory.** The six categories do not
+agree with one another: `E`, `AE`, `K` and `G` each require an exemption reason, `Z` **forbids** one
+(zero-rated is taxed at 0 %, not exempt — BR-Z-10), and `K` additionally requires a delivery country
+(BR-IC-12). Assuming `Z` behaved like the others produced documents rejected for the very field the
+generator was being careful about. The integration suite now validates one invoice per category.
+
+**The sRGB ICC profile is constructed, not shipped.**
+[`icc.ts`](packages/facturx/src/generate/icc.ts) builds a valid ICC v2 matrix/TRC profile — header,
+tag table, sampled sRGB tone curve — because PDF/A requires an OutputIntent and the alternatives
+were a binary blob in the repository or a file the host may not have (this machine had none). The
+generator has no external asset and produces byte-identical output on any machine, which is what
+lets an archived document be identified by its hash.
+
+---
+
 ## Correctness notes
 
 **Money is never a float.** All amounts are exact `bigint`-backed decimals
@@ -109,7 +151,24 @@ prove our parser agrees with our own idea of CII — the assumption most likely 
 bugs were found this way: a scan window too small to find the root element behind a long licence
 comment, and the over-strict `BR-CO-16` check described above.
 
-**107 tests**, including 9 integration tests against the live engine. The integration suite skips
+**Generating and validating are checked against each other.** The integration suite sends generated
+documents back through the Mustangproject engine and requires zero findings. Our parser agreeing
+with our own serialiser would prove nothing about either; only an independent engine's verdict does.
+This is what caught the two defects below.
+
+**A false pass was fixed here.** Mustang's top-level `<summary status="valid"/>` aggregates the
+Schematron result only — a document whose **PDF/A validation failed** is still summarised as valid,
+and the veraPDF verdict arrives as untagged text inside `<pdf>` rather than as findings. We trusted
+that summary, so a Factur-X file that was not PDF/A-3 was reported to the user as _conforme_. The
+PDF/A failures are now parsed into findings with their ISO clause, and the verdict consults the
+PDF/A result directly. A validator that says "compliant" about a non-compliant document is worse
+than no validator.
+
+The same round trip showed our own generator producing PDFs that failed PDF/A on ISO 19005-3 clause
+6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
+validator does.
+
+**171 tests**, including 19 integration tests against the live engine. The integration suite skips
 itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 
 ---
@@ -118,8 +177,11 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 
 - **Phase 0 — free public validator.** ✅ Done. Lead generation, and it forced validation
   correctness first.
-- **Phase 1 — generate + validate + archive.** Factur-X generation (PDF/A-3 + `factur-x.xml`,
-  `BASIC` profile), immutable archiving. Prisma schema is modelled for it.
+- **Phase 1 — generate + validate + archive.** Generation ✅ done: `BASIC`-profile CII, PDF/A-3
+  assembly, pre-flight checks, self-validation against the engine
+  ([`src/generate`](packages/facturx/src/generate)). Still to build: persistence behind the modelled
+  Prisma schema, authentication and tenancy, and immutable archiving. No invoicing UI or API surface
+  is exposed yet — the generator is library code with no route in front of it.
 - **Phase 2 — platform connection.** Transmit, receive, ingest lifecycle statuses behind
   `PdpProvider`. Queue-based, idempotent.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.

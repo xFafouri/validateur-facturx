@@ -236,8 +236,14 @@ export async function analyze(
   // "Indeterminate" is a real third state and must not be collapsed into "non-compliant": if the
   // engine never ran, we have no basis to call a document non-compliant, and saying so would be
   // a false accusation about a legal document.
+  //
+  // The PDF/A verdict is consulted separately from the engine's overall summary, which reports
+  // `valid` for a document whose PDF/A validation failed - it aggregates the Schematron result
+  // only. A Factur-X file that is not PDF/A-3 is non-compliant however clean its XML is, and
+  // saying otherwise is the one error this product cannot afford: a false pass.
+  const pdfaFailed = validation?.summary.pdf === 'invalid';
   const verdict: AnalysisResult['verdict'] = validation
-    ? validation.summary.valid && counts.errors === 0
+    ? validation.summary.valid && counts.errors === 0 && !pdfaFailed
       ? 'conforme'
       : 'non-conforme'
     : 'indeterminé';

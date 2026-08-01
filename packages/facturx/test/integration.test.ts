@@ -13,7 +13,10 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/analyze.js';
 import { MustangEngine } from '../src/engine/mustang.js';
+import { resolveSystemFonts } from '../src/generate/fonts.js';
+import { generateCiiXml, generateFacturX } from '../src/generate/index.js';
 import { buildInvoiceBytes } from './fixtures/builder.js';
+import { BASE_DRAFT, draftWith, lineWith, FIXED_NOW } from './fixtures/draft.js';
 
 const BASE_URL = process.env.VALIDATOR_URL ?? 'http://127.0.0.1:8081';
 const engine = new MustangEngine({ baseUrl: BASE_URL });
@@ -34,6 +37,15 @@ if (!available) {
 }
 
 const suite = describe.skipIf(!available);
+
+/** PDF assembly needs an embeddable font; see the note in `generate.test.ts`. */
+const fonts = (() => {
+  try {
+    return resolveSystemFonts();
+  } catch {
+    return null;
+  }
+})();
 
 suite('sidecar health', () => {
   it('reports readiness once warmed up', async () => {
@@ -135,5 +147,146 @@ suite('validation via the sidecar', () => {
     expect(result.engineError).not.toBeNull();
     // Parsing is independent of the engine and must still produce a readable invoice.
     expect(result.invoice?.invoiceNumber).toBe('FA-2026-0042');
+  });
+});
+
+/**
+ * The closed loop.
+ *
+ * Everything else in the suite proves we read the engine correctly. This proves we can *write* a
+ * document it accepts - which is the only assertion that covers the generator end to end, since
+ * our own parser agreeing with our own serialiser proves nothing about either. A regression here
+ * means we are shipping invoices that a certified platform would reject.
+ */
+suite('generated documents, validated by the engine', () => {
+  it('accepts generated XML with no errors at all', async () => {
+    const xml = generateCiiXml(BASE_DRAFT);
+    const result = await analyze(new TextEncoder().encode(xml), 'generee.xml', { engine });
+
+    if (result.verdict !== 'conforme') {
+      console.error(
+        'findings:',
+        result.findings.map((f) => `${f.ruleId}: ${f.message}`),
+      );
+    }
+    expect(result.verdict).toBe('conforme');
+    expect(result.counts.errors).toBe(0);
+    expect(result.profile).toBe('BASIC');
+  });
+
+  it('accepts the generated PDF/A-3, including the ICC profile we build ourselves', async () => {
+    const generated = await generateFacturX(BASE_DRAFT, { fonts: fonts!, now: FIXED_NOW });
+    const result = await analyze(generated.pdf, 'facture.pdf', { engine });
+
+    if (result.verdict !== 'conforme') {
+      console.error(
+        'findings:',
+        result.findings.map((f) => `${f.ruleId}: ${f.message}`),
+      );
+    }
+    expect(result.kind).toBe('facturx-pdf');
+    expect(result.verdict).toBe('conforme');
+    expect(result.counts.errors).toBe(0);
+  });
+
+  it('accepts an invoice mixing VAT rates, a reverse charge and a deposit', async () => {
+    const draft = draftWith({
+      invoiceNumber: 'FA-2026-0091',
+      prepaidAmount: '150.00',
+      lines: [
+        lineWith({ quantity: '3.5', unitPrice: '12.3456', vatRatePercent: '20.00' }),
+        lineWith({ quantity: '7', unitPrice: '4.99', vatRatePercent: '5.50' }),
+        lineWith({
+          quantity: '2',
+          unitPrice: '80.00',
+          vatCategory: 'AE',
+          vatRatePercent: '0',
+          exemptionReason: 'Autoliquidation — article 283-2 du CGI',
+        }),
+      ],
+    });
+
+    const result = await analyze(new TextEncoder().encode(generateCiiXml(draft)), 'mixte.xml', {
+      engine,
+    });
+
+    if (result.verdict !== 'conforme') {
+      console.error(
+        'findings:',
+        result.findings.map((f) => `${f.ruleId}: ${f.message}`),
+      );
+    }
+    expect(result.verdict).toBe('conforme');
+  });
+
+  /**
+   * Each VAT category has its own rule family, and they do not agree with one another: `E`, `AE`,
+   * `K` and `G` each require an exemption reason, while `Z` forbids one, and `K` additionally
+   * requires a delivery country. Getting this wrong produces a document rejected for the exact
+   * field the generator was trying to be careful about - which is what happened, in both
+   * directions, until the engine was asked.
+   */
+  const categories: ReadonlyArray<[string, Partial<(typeof BASE_DRAFT.lines)[number]>, string?]> = [
+    ['S standard', { vatCategory: 'S', vatRatePercent: '20.00' }],
+    ['Z zero-rated', { vatCategory: 'Z', vatRatePercent: '0' }],
+    [
+      'E exempt',
+      { vatCategory: 'E', vatRatePercent: '0', exemptionReason: 'Exonération article 261 du CGI' },
+    ],
+    [
+      'AE reverse charge',
+      {
+        vatCategory: 'AE',
+        vatRatePercent: '0',
+        exemptionReason: 'Autoliquidation — article 283-2 du CGI',
+      },
+    ],
+    [
+      'G export',
+      {
+        vatCategory: 'G',
+        vatRatePercent: '0',
+        exemptionReason: 'Exportation hors UE — article 262 I du CGI',
+      },
+    ],
+    [
+      'K intra-community',
+      {
+        vatCategory: 'K',
+        vatRatePercent: '0',
+        exemptionReason: 'Livraison intracommunautaire — article 262 ter I du CGI',
+      },
+      'DE',
+    ],
+  ];
+
+  it.each(categories)('accepts a %s line', async (_label, override, deliveryCountryCode) => {
+    const draft = draftWith({
+      lines: [lineWith(override)],
+      ...(deliveryCountryCode ? { deliveryCountryCode } : {}),
+    });
+
+    const result = await analyze(new TextEncoder().encode(generateCiiXml(draft)), 'tva.xml', {
+      engine,
+    });
+
+    if (result.verdict !== 'conforme') {
+      console.error(
+        'findings:',
+        result.findings.map((f) => `${f.ruleId}: ${f.message}`),
+      );
+    }
+    expect(result.verdict).toBe('conforme');
+  });
+
+  it('generates an invoice whose amounts the engine and our own checks agree on', async () => {
+    const result = await analyze(
+      new TextEncoder().encode(generateCiiXml(BASE_DRAFT)),
+      'generee.xml',
+      { engine },
+    );
+
+    expect(result.arithmetic?.allPassed).toBe(true);
+    expect(result.suspectLines).toHaveLength(0);
   });
 });

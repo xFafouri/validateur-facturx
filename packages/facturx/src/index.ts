@@ -22,6 +22,43 @@ export type {
 export { checkArithmetic, suspectLinesForLineTotal } from './checks.js';
 export type { ArithmeticCheck, ArithmeticReport, VatRateCheck } from './checks.js';
 
+export { DraftInvalidError, generateCiiXml, generateFacturX } from './generate/index.js';
+export type { GeneratedInvoice, GenerateOptions } from './generate/index.js';
+
+export { checkDraft, isValidIban } from './generate/check-draft.js';
+export type { DraftCheckResult, DraftIssue, DraftIssueSeverity } from './generate/check-draft.js';
+
+export { computeInvoice, DraftAmountError } from './generate/compute.js';
+export type {
+  ComputedInvoice,
+  ComputedLine,
+  ComputedTaxGroup,
+  ComputedTotals,
+} from './generate/compute.js';
+
+export { FRENCH_LEGAL_NOTES, serialiseCii } from './generate/cii.js';
+export type { SerialiseOptions } from './generate/cii.js';
+
+export {
+  DRAFT_TYPE_CODES,
+  REASON_REQUIRED_CATEGORIES,
+  VAT_CATEGORIES,
+  ZERO_RATED_CATEGORIES,
+} from './generate/draft.js';
+export type {
+  DraftAddress,
+  DraftLine,
+  DraftParty,
+  DraftTypeCode,
+  InvoiceDraft,
+  VatCategory,
+} from './generate/draft.js';
+
+export { FontNotFoundError, resolveSystemFonts, systemFontsAvailable } from './generate/fonts.js';
+export { buildSrgbIccProfile } from './generate/icc.js';
+export { PdfGenerationError, renderPdfA3 } from './generate/pdf.js';
+export type { EmbeddedFonts, PdfRenderOptions } from './generate/pdf.js';
+
 export { MustangEngine } from './engine/mustang.js';
 export type { MustangEngineOptions } from './engine/mustang.js';
 export { extractRuleId, parseMustangReport } from './engine/report.js';
