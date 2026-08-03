@@ -11,7 +11,10 @@ import { defineConfig } from 'tsup';
  * and dual format means the ESM web app and the CJS API can share one package honestly.
  */
 export default defineConfig({
-  entry: ['src/index.ts'],
+  // Two entry points. `browser` carries only the pure, `bigint`-backed modules, so the web app can
+  // preview invoice totals with the same code that computes them for real without pulling
+  // `node:fs` - and the whole PDF generator behind it - into a client bundle.
+  entry: ['src/index.ts', 'src/browser.ts'],
   format: ['esm', 'cjs'],
   dts: true,
   clean: true,

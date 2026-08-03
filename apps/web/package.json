@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@facturx/auth": "workspace:*",
     "@facturx/core": "workspace:*",
     "@prisma/client": "^6.2.1",
     "next": "^15.1.6",

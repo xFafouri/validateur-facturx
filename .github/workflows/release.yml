@@ -49,6 +49,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @facturx/db generate
       - run: pnpm --filter @facturx/core build
+      - run: pnpm --filter @facturx/auth build
       - run: pnpm lint
       - run: pnpm -r typecheck
       - run: pnpm -r test

@@ -15,6 +15,7 @@ WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
 COPY packages/facturx/package.json packages/facturx/
+COPY packages/auth/package.json packages/auth/
 COPY packages/db/package.json packages/db/
 
 RUN pnpm install --frozen-lockfile
@@ -27,6 +28,7 @@ WORKDIR /repo
 COPY --from=deps /repo/node_modules ./node_modules
 COPY --from=deps /repo/apps/web/node_modules ./apps/web/node_modules
 COPY --from=deps /repo/packages/facturx/node_modules ./packages/facturx/node_modules
+COPY --from=deps /repo/packages/auth/node_modules ./packages/auth/node_modules
 COPY --from=deps /repo/packages/db/node_modules ./packages/db/node_modules
 
 COPY . .
@@ -36,8 +38,8 @@ COPY . .
 RUN DATABASE_URL="postgresql://placeholder:placeholder@localhost:5432/placeholder" \
     pnpm --filter @facturx/db generate
 
-# The apps consume core's build output, so it must be built first.
-RUN pnpm --filter @facturx/core build
+# The apps consume the shared packages' build output, so those come first.
+RUN pnpm --filter @facturx/core build && pnpm --filter @facturx/auth build
 
 # Baked in at build time: NEXT_PUBLIC_* values are inlined into the client bundle, so they cannot
 # be supplied at run time.

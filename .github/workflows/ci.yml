@@ -37,9 +37,10 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @facturx/db generate
 
-      # `@facturx/core` must be built before the apps: both consume its dist output.
-      - name: Build core
-        run: pnpm --filter @facturx/core build
+      # `@facturx/core` and `@facturx/auth` must be built before the apps: both consume their
+      # dist output, and typechecking an app against a missing dist fails on the import itself.
+      - name: Build shared packages
+        run: pnpm --filter @facturx/core build && pnpm --filter @facturx/auth build
 
       - run: pnpm lint
       - run: pnpm -r typecheck
@@ -68,6 +69,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @facturx/db generate
       - run: pnpm --filter @facturx/core build
+      - run: pnpm --filter @facturx/auth build
 
       - name: Build validator sidecar
         run: docker build -t facturx-validator:ci services/validator
@@ -117,5 +119,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @facturx/db generate
       - run: pnpm --filter @facturx/core build
+      - run: pnpm --filter @facturx/auth build
       - run: pnpm --filter @facturx/web build
       - run: pnpm --filter @facturx/api build

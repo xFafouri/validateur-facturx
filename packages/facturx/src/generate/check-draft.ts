@@ -235,6 +235,20 @@ function checkLines(draft: InvoiceDraft, issues: DraftIssue[]): void {
       });
     }
 
+    // BT-154 does not exist in the BASIC profile - `TradeProductType` there permits only
+    // `GlobalID` and `Name`. The description is still printed on the PDF, so the invoice reads
+    // correctly to a human; it is simply not machine-readable for the recipient's software. A
+    // warning rather than an error: dropping the text is a limitation of the profile, not a
+    // defect in the invoice.
+    if (line.description?.trim()) {
+      issues.push({
+        field: `${at}.description`,
+        severity: 'warning',
+        message: `${human} : la description détaillée est imprimée sur le PDF mais n'est pas reprise dans le XML, le profil BASIC ne transportant pas ce champ (BT-154). Mettez l'information essentielle dans la désignation si le logiciel de votre client doit la lire.`,
+        ruleId: 'BT-154',
+      });
+    }
+
     const quantity = parseDecimal(line.quantity);
     if (quantity === null) {
       issues.push({

@@ -189,6 +189,39 @@ suite('generated documents, validated by the engine', () => {
     expect(result.counts.errors).toBe(0);
   });
 
+  /**
+   * Regression, against the engine rather than against our own expectations.
+   *
+   * A line description used to be written out as `ram:Description`, which BASIC's schema rejects
+   * outright, so any invoice carrying one failed XSD validation and could not be issued. The unit
+   * test asserts the element is absent; this asserts the document the engine actually sees is
+   * accepted - which is the claim that matters, and the one no amount of reading the XSD proves.
+   */
+  it('accepts an invoice whose lines carry descriptions', async () => {
+    const draft = draftWith({
+      invoiceNumber: 'FA-2026-0093',
+      lines: [
+        lineWith({
+          name: 'Remplacement chauffe-eau 200 L',
+          description: 'Modèle thermodynamique, dépose de l’ancien appareil et mise en service.',
+        }),
+      ],
+    });
+    const generated = await generateFacturX(draft, { fonts: fonts!, now: FIXED_NOW });
+    const result = await analyze(generated.pdf, 'facture-description.pdf', { engine });
+
+    if (result.verdict !== 'conforme') {
+      console.error(
+        'findings:',
+        result.findings.map((f) => `${f.ruleId}: ${f.message}`),
+      );
+    }
+    expect(result.verdict).toBe('conforme');
+    expect(result.counts.errors).toBe(0);
+    // The description is warned about at draft time, not silently swallowed.
+    expect(generated.warnings.map((warning) => warning.field)).toContain('lines.0.description');
+  });
+
   it('accepts an invoice mixing VAT rates, a reverse charge and a deposit', async () => {
     const draft = draftWith({
       invoiceNumber: 'FA-2026-0091',

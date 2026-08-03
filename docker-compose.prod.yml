@@ -42,6 +42,9 @@ services:
       NODE_ENV: production
       VALIDATOR_URL: http://validator:8081
       DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL}
+      # Where the signed-in area reaches the invoicing API. Server-to-server: the browser never
+      # talks to it, so it needs no public route.
+      API_URL: ${API_URL:-http://api:3001}
       # Behind a reverse proxy by default; see the note above.
       TRUST_PROXY: ${TRUST_PROXY:-true}
     ports:

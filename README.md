@@ -4,12 +4,11 @@ A _Solution Compatible_ (SC) for France's 2026–2027 B2B e-invoicing mandate, a
 underserved long tail: micro-businesses, accountants managing many small clients, and niche
 software with no native e-invoicing.
 
-**Status: Phase 0 complete; Phase 1 complete except for authentication and a UI.** The free public
-validator runs, backed by a real Schematron engine, with every rule explained in French. Invoices
-are also _generated_ — PDF/A-3 with embedded `factur-x.xml` — self-validated against that same
-engine, persisted, and sealed into an immutable content-addressed archive. What is missing is the
-way in: there is no authentication layer and no invoicing UI, so issuance is reachable from code and
-tests only. See [Roadmap](#roadmap).
+**Status: Phases 0 and 1 complete.** The free public validator runs, backed by a real Schematron
+engine, with every rule explained in French. Invoices are also _generated_ — PDF/A-3 with embedded
+`factur-x.xml` — self-validated against that same engine, persisted, and sealed into an immutable
+content-addressed archive. A signed-in user can now add the businesses they invoice for, issue an
+invoice through the UI, and download the sealed PDF and XML. See [Roadmap](#roadmap).
 
 > **Scope boundary.** This is a _Solution Compatible_, **not** a _Plateforme Agréée_ (PA). It
 > creates and validates invoices and connects to an existing certified platform; it is not
@@ -59,9 +58,10 @@ invoices must install one (`fonts-dejavu-core`) or point `FACTURX_FONT_REGULAR` 
 
 | Path                 | What it is                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `apps/web`           | Next.js. Public French validator + SEO landing page. **Phase 0 — built.**                                     |
+| `apps/web`           | Next.js. Public French validator, SEO landing page, and the signed-in invoicing UI. **Built.**                |
 | `apps/api`           | NestJS. Validation, invoicing and archiving implemented; PDP and billing are skeletons.                       |
 | `packages/facturx`   | Core: CII parsing/serialising, PDF/A-3 extraction and assembly, validation, French rule catalogue. **Built.** |
+| `packages/auth`      | Password hashing and server-side sessions, shared by the web app and the API. **Built.**                      |
 | `packages/db`        | Prisma schema for the full data model. **Migrated and in use.**                                               |
 | `services/validator` | Java sidecar wrapping Mustangproject. **Built.**                                                              |
 
@@ -166,6 +166,45 @@ lets an archived document be identified by its hash.
 
 ---
 
+## Authentication
+
+Identity is **self-hosted**, in the same EU Postgres as the invoices. A managed provider would put
+the user table on someone else's infrastructure, typically US-hosted, reopening the data-residency
+question the rest of the architecture is careful to close.
+
+**Not Auth.js**, despite it being the obvious default for Next.js. `@auth/core` mints an encrypted
+JWT on the credentials sign-in path and rejects `strategy: "database"` when credentials is the only
+provider, so email-and-password under Auth.js leaves no session row in Postgres — and the API would
+then have to reimplement its HKDF/JWE key derivation to identify a caller, against a package still
+in beta. [`packages/auth`](packages/auth) is about four hundred lines instead.
+
+Sessions are **opaque tokens resolved against a table on every request**. That costs a read per
+request, and buys two properties worth more than the read:
+
+- **Revocation is immediate.** Signing out, disabling an account or reacting to a stolen laptop
+  takes effect on the next request. A stateless token stays valid until it expires whatever the
+  database says, and "valid for another week" is not an acceptable answer for a system holding ten
+  years of a client's tax records.
+- **The API verifies callers itself.** Both tiers read the same table, so identity is never
+  asserted across a trust boundary — no shared signing secret, and no header to spoof if the API is
+  ever reached directly. `SessionGuard`
+  ([`apps/api/src/auth`](apps/api/src/auth/session.guard.ts)) is the only thing that maps a request
+  to a tenant, and the tenant id is never read from a request body.
+
+Only the SHA-256 of a token is stored, so a leaked backup or a stray query log yields no live
+session. Passwords use scrypt from `node:crypto` — memory-hard, and already in the runtime, so the
+Docker image needs no native build toolchain. Digests carry their own parameters and are upgraded
+on sign-in when the cost is raised. Sign-in spends a full scrypt even for an address with no
+account, so response latency cannot be used to enumerate a cabinet's client list.
+
+CSRF has two independent defences: the cookie is `SameSite=Lax`, so a cross-site POST does not
+carry it, and Next.js checks `Origin` against `Host` on every Server Action.
+
+**Not built: password reset.** There is no mail transport yet, so a locked-out user needs an
+operator. Sessions, revocation and account disabling are all in place to support it when there is.
+
+---
+
 ## Correctness notes
 
 **Money is never a float.** All amounts are exact `bigint`-backed decimals
@@ -216,9 +255,9 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
   pre-flight checks — [`src/generate`](packages/facturx/src/generate)), self-validation against the
   engine, tenant-scoped persistence, and immutable content-addressed archiving
   ([`apps/api/src/invoicing`](apps/api/src/invoicing), [`archiving`](apps/api/src/archiving)).
-  **Still to build: authentication and the invoicing UI.** Issuance is deliberately left without an
-  HTTP route until there is an auth layer to scope it by — an unauthenticated endpoint that writes
-  into a tenant's archive is the wrong seam to leave open.
+  Authentication ([`packages/auth`](packages/auth)) and the invoicing UI
+  ([`apps/web/src/app/(app)`](apps/web/src/app)) close the phase: issuance is now behind a session
+  guard that resolves the acting tenant from a session row, never from the request.
 - **Phase 2 — platform connection.** Transmit, receive, ingest lifecycle statuses behind
   `PdpProvider`. Queue-based, idempotent.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
@@ -226,17 +265,19 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 
 ### Decisions taken
 
-| Decision                | Choice                                          |
-| ----------------------- | ----------------------------------------------- |
-| Validation engine       | Mustangproject Java sidecar                     |
-| Interface language      | French first; i18n structure in place           |
-| Default emitted profile | `BASIC` output, richer data retained internally |
-| Scaffold                | Full monorepo, Phase 0 implemented              |
+| Decision                | Choice                                              |
+| ----------------------- | --------------------------------------------------- |
+| Validation engine       | Mustangproject Java sidecar                         |
+| Interface language      | French first; i18n structure in place               |
+| Default emitted profile | `BASIC` output, richer data retained internally     |
+| Scaffold                | Full monorepo, Phase 0 implemented                  |
+| Authentication          | Self-hosted: scrypt passwords, sessions in Postgres |
 
 ### Still open
 
 Which certified platform to integrate first; hosting region and topology (**must be EU** — French
-tax data) and with it the production object store; auth provider; Stripe price points.
+tax data) and with it the production object store; Stripe price points. Password reset by email is
+not built — there is no mail transport yet, so a locked-out user currently needs an operator.
 
 ---
 

@@ -120,6 +120,18 @@ describe('checkDraft', () => {
     );
   });
 
+  /** Warns, without refusing: the text still reaches the reader, just not the reader's software. */
+  it('warns that a line description will not reach the XML', () => {
+    const result = checkDraft(
+      draftWith({ lines: [lineWith({ description: 'Modèle X, pose comprise' })] }),
+    );
+
+    expect(result.ok).toBe(true);
+    const warning = result.issues.find((issue) => issue.field === 'lines.0.description');
+    expect(warning?.severity).toBe('warning');
+    expect(warning?.message).toContain('BASIC');
+  });
+
   it('requires a reason when VAT is not charged', () => {
     const result = checkDraft(
       draftWith({
@@ -289,6 +301,32 @@ describe('serialiseCii', () => {
       'BasisAmount',
       'CategoryCode',
       'RateApplicablePercent',
+    ]);
+  });
+
+  /**
+   * Regression. `ram:Description` was emitted for any line that had one, and BASIC's
+   * `TradeProductType` admits only `GlobalID` and `Name` - the element first appears in EN 16931.
+   * The result was an XSD failure ("Invalid content was found starting with element
+   * 'ram:Description'"), so every invoice with a line description was refused at issuance. It got
+   * that far because no test ever set a description.
+   */
+  it('omits the line description, which the BASIC profile cannot carry', () => {
+    const drafted = draftWith({
+      lines: [lineWith({ name: 'Chauffe-eau', description: 'Modèle X, pose comprise' })],
+    });
+    const document = serialiseCii(drafted, computeInvoice(drafted));
+
+    expect(document).toContain('<ram:Name>Chauffe-eau</ram:Name>');
+    expect(document).not.toContain('Modèle X, pose comprise');
+    // The `SpecifiedTradeProduct` sequence is `GlobalID`, `Name` and nothing else here.
+    const product = document.slice(
+      document.indexOf('<ram:SpecifiedTradeProduct>'),
+      document.indexOf('</ram:SpecifiedTradeProduct>'),
+    );
+    expect([...product.matchAll(/<ram:(\w+)>/g)].map((match) => match[1])).toEqual([
+      'SpecifiedTradeProduct',
+      'Name',
     ]);
   });
 

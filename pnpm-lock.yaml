@@ -81,6 +81,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@facturx/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@facturx/core':
         specifier: workspace:*
         version: link:../../packages/facturx

@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import Link from 'next/link';
 import { Validator } from '@/components/Validator';
 
 export const dynamic = 'force-dynamic';
@@ -90,6 +91,23 @@ export default function HomePage() {
               FAQ
             </a>
           </nav>
+
+          {/*
+            The route from the free validator to the paid product. Deliberately understated and
+            placed after the nav: the validator's promise is that it needs no account, and a
+            prominent sign-up next to it would read as a bait-and-switch.
+          */}
+          <div className="flex items-center gap-4 text-sm">
+            <Link href="/connexion" className="text-navy-600 hover:text-navy-900">
+              Connexion
+            </Link>
+            <Link
+              href="/creer-un-compte"
+              className="rounded border border-navy-200 px-3 py-1.5 font-medium text-navy-800 hover:bg-navy-50"
+            >
+              Émettre des factures
+            </Link>
+          </div>
         </div>
       </header>
 

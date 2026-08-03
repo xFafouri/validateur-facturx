@@ -106,7 +106,12 @@ function lineNode(line: ComputedLine): XmlNode {
     el('ram:AssociatedDocumentLineDocument', [leaf('ram:LineID', line.lineId)]),
     el('ram:SpecifiedTradeProduct', [
       leaf('ram:Name', line.source.name),
-      line.source.description ? leaf('ram:Description', line.source.description) : null,
+      // No `ram:Description` (BT-154). BASIC's `TradeProductType` permits only `GlobalID` and
+      // `Name`; the element first appears in EN 16931. Emitting it produced a document that
+      // failed XSD validation outright - "Invalid content was found starting with element
+      // 'ram:Description'" - which meant any invoice carrying a line description could not be
+      // issued at all. The text is not lost: `pdf.ts` prints it under the line name, so a human
+      // reads it on the face of the invoice. `checkDraft` warns that it is not machine-readable.
     ]),
     el('ram:SpecifiedLineTradeAgreement', [
       el('ram:NetPriceProductTradePrice', [leaf('ram:ChargeAmount', format(line.unitPrice))]),
