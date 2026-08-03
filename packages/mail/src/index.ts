@@ -16,6 +16,9 @@ export type { MailMessage, MailTransport } from './transport.js';
 export { SmtpMailTransport } from './smtp.js';
 export type { SmtpOptions } from './smtp.js';
 
+export { BrevoHttpTransport, parseAddress } from './brevo.js';
+export type { BrevoOptions, MailAddress } from './brevo.js';
+
 export { resolveMailConfig } from './config.js';
 export type { MailConfig } from './config.js';
 

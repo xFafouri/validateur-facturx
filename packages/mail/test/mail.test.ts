@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BrevoHttpTransport, parseAddress } from '../src/brevo.js';
 import { resolveMailConfig } from '../src/config.js';
 import {
   ConsoleMailTransport,
@@ -165,5 +166,127 @@ describe('the messages', () => {
 
     const urls = [...new Set(html.match(/https?:\/\/[^"'\s<]+/g) ?? [])];
     expect(urls).toEqual([link]);
+  });
+});
+
+describe('parsing a sender', () => {
+  it('splits a display name from the address, which the HTTP API wants separately', () => {
+    expect(parseAddress('Factur-X <noreply@exemple.fr>')).toEqual({
+      name: 'Factur-X',
+      email: 'noreply@exemple.fr',
+    });
+  });
+
+  /** A bare address stays nameless rather than being given an invented display name. */
+  it('handles a bare address', () => {
+    expect(parseAddress('noreply@exemple.fr')).toEqual({ email: 'noreply@exemple.fr' });
+    expect(parseAddress('  <noreply@exemple.fr> ')).toEqual({ email: 'noreply@exemple.fr' });
+  });
+
+  it('strips quotes some clients put around a display name', () => {
+    expect(parseAddress('"Cabinet Durand" <a@b.fr>')).toEqual({
+      name: 'Cabinet Durand',
+      email: 'a@b.fr',
+    });
+  });
+});
+
+describe('the Brevo HTTP transport', () => {
+  const ok = () => new Response(JSON.stringify({ messageId: '<x@brevo>' }), { status: 201 });
+
+  function transportWith(respond: () => Response) {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return respond();
+    }) as unknown as typeof fetch;
+
+    return {
+      calls,
+      transport: new BrevoHttpTransport({
+        apiKey: 'xkeysib-test',
+        from: 'Factur-X <noreply@exemple.fr>',
+        fetchImpl,
+      }),
+    };
+  }
+
+  it('posts to the transactional endpoint, not the campaign one', async () => {
+    const { transport, calls } = transportWith(ok);
+    await transport.send({ to: 'marie@cabinet.fr', subject: 'Objet', text: 'Corps' });
+
+    // `/v3/emailCampaigns` would put a reset link through a marketing pipeline, complete with
+    // unsubscribe footer and list membership.
+    expect(calls[0]!.url).toBe('https://api.brevo.com/v3/smtp/email');
+    expect(calls[0]!.url).not.toContain('emailCampaigns');
+  });
+
+  it('sends the key as a header and the message as Brevo expects it', async () => {
+    const { transport, calls } = transportWith(ok);
+    await transport.send({
+      to: 'marie@cabinet.fr',
+      subject: 'Réinitialisation',
+      text: 'lien',
+      html: '<p>lien</p>',
+    });
+
+    const { init } = calls[0]!;
+    expect((init.headers as Record<string, string>)['api-key']).toBe('xkeysib-test');
+
+    const body = JSON.parse(String(init.body));
+    expect(body.sender).toEqual({ name: 'Factur-X', email: 'noreply@exemple.fr' });
+    expect(body.to).toEqual([{ email: 'marie@cabinet.fr' }]);
+    expect(body.textContent).toBe('lien');
+    expect(body.htmlContent).toBe('<p>lien</p>');
+    expect(body.headers['Auto-Submitted']).toBe('auto-generated');
+  });
+
+  it('omits the HTML part when there is none', async () => {
+    const { transport, calls } = transportWith(ok);
+    await transport.send({ to: 'a@b.fr', subject: 's', text: 't' });
+    expect(JSON.parse(String(calls[0]!.init.body))).not.toHaveProperty('htmlContent');
+  });
+
+  /**
+   * Brevo answers 401 both for a bad key and for a good key from an unlisted address, and the two
+   * need opposite actions - regenerating a key would not help the second at all.
+   */
+  it('tells an unlisted IP apart from a bad key', async () => {
+    const unlisted = () =>
+      new Response(
+        JSON.stringify({
+          code: 'unauthorized',
+          message: 'We have detected you are using an unrecognised IP address 203.0.113.7.',
+        }),
+        { status: 401 },
+      );
+    await expect(
+      transportWith(unlisted).transport.send({ to: 'a@b.fr', subject: 's', text: 't' }),
+    ).rejects.toThrow(/adresse IP sortante n'est pas autorisée/);
+
+    const badKey = () =>
+      new Response(JSON.stringify({ code: 'unauthorized', message: 'Key not found' }), {
+        status: 401,
+      });
+    await expect(
+      transportWith(badKey).transport.send({ to: 'a@b.fr', subject: 's', text: 't' }),
+    ).rejects.toThrow(/xkeysib/);
+  });
+
+  it('names an unvalidated sender as the cause', async () => {
+    const refused = () =>
+      new Response(JSON.stringify({ code: 'invalid_parameter', message: 'Invalid sender email' }), {
+        status: 400,
+      });
+    await expect(
+      transportWith(refused).transport.send({ to: 'a@b.fr', subject: 's', text: 't' }),
+    ).rejects.toThrow(/expéditeur validé/);
+  });
+
+  it('survives an error body that is not JSON', async () => {
+    const html = () => new Response('<html>502 Bad Gateway</html>', { status: 502 });
+    await expect(
+      transportWith(html).transport.send({ to: 'a@b.fr', subject: 's', text: 't' }),
+    ).rejects.toThrow(/HTTP 502/);
   });
 });

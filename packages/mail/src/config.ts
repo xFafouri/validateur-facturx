@@ -3,12 +3,17 @@
  *
  * One place, so the web app and the API cannot end up disagreeing about whether mail is on.
  *
- * The default when `SMTP_HOST` is unset is the console driver, not a failure. A developer running
+ * The default when nothing is configured is the console driver, not a failure. A developer running
  * the stack for the first time should be able to complete a password reset by reading the link out
- * of their terminal, without an account at any provider. Production sets `SMTP_HOST` and gets real
- * delivery; a deployment that wants a missing relay to be fatal sets `MAIL_TRANSPORT=unavailable`.
+ * of their terminal, without an account at any provider. A deployment that wants a missing relay to
+ * be fatal sets `MAIL_TRANSPORT=unavailable`.
+ *
+ * `BREVO_API_KEY` wins over `SMTP_HOST` when both are set. HTTPS reaches the provider from places
+ * SMTP cannot - CI runners, most container platforms, plenty of ISPs all block outbound 587 - so
+ * when someone has configured both, the one that works everywhere is the safer default.
  */
 
+import { BrevoHttpTransport } from './brevo.js';
 import { SmtpMailTransport } from './smtp.js';
 import { ConsoleMailTransport, UnavailableMailTransport, type MailTransport } from './transport.js';
 
@@ -32,6 +37,11 @@ export function resolveMailConfig(env: NodeJS.ProcessEnv = process.env): MailCon
   }
   if (env.MAIL_TRANSPORT === 'console') {
     return { transport: new ConsoleMailTransport(), from, baseUrl };
+  }
+
+  const brevoApiKey = env.BREVO_API_KEY?.trim();
+  if (brevoApiKey) {
+    return { transport: new BrevoHttpTransport({ apiKey: brevoApiKey, from }), from, baseUrl };
   }
 
   const host = env.SMTP_HOST?.trim();

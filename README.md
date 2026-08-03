@@ -264,7 +264,12 @@ Password resets and invitations, behind a transport port with three drivers
 the same reason: production sends through a relay, development must not, and tests must be able to
 read what was sent.
 
-**With no `SMTP_HOST` set, messages print to the console.** That is the default on purpose: a
+Two ways to reach Brevo: **the HTTP API** (`BREVO_API_KEY`) or SMTP. The API wins when both are
+set, because outbound SMTP is blocked on most CI runners, many container platforms and plenty of
+ISPs while 443 is open everywhere — and because a refused sender comes back as a sentence rather
+than a socket timeout. SMTP stays supported for a self-hosted relay.
+
+**With neither set, messages print to the console.** That is the default on purpose: a
 developer can complete a password reset by reading the link out of their terminal, with no provider
 account, no domain and no DNS. Production sets `SMTP_HOST`; a deployment that wants a missing relay
 to be fatal rather than silently printing sets `MAIL_TRANSPORT=unavailable`.
@@ -290,8 +295,9 @@ page, and a blocked port must fail in seconds with a message naming the host, no
 send never changes what the user is told, so it cannot become an enumeration signal either.
 
 Providers also require the sender to be **validated** before they will relay for it. With Brevo
-that is either a verified single address or an authenticated domain; until one exists, a send is
-accepted by the API and rejected at the relay.
+that is either a verified single address or an authenticated domain. Brevo can additionally
+restrict API keys to allowlisted IPs — a 401 naming an IP address means that, not a bad key, and
+the two need opposite actions. The transport distinguishes them.
 
 ### The links
 
