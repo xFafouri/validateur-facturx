@@ -55,6 +55,14 @@ const FRENCH_VAT_RATES = ['20', '10', '5.5', '2.1', '0'];
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * UNTDID 4461 codes that mean "credit transfer", and so oblige BT-84 under BR-CO-27.
+ *
+ * Confirmed against the engine: `30` and `58` are refused without an account, while cash (`10`),
+ * cheque (`20`), card (`48`) and direct debit (`49`) are accepted without one.
+ */
+const CREDIT_TRANSFER_MEANS = ['30', '58'];
+
 function isRealDate(value: string): boolean {
   if (!ISO_DATE.test(value)) return false;
   const [year, month, day] = value.split('-').map(Number) as [number, number, number];
@@ -476,6 +484,21 @@ function checkHeader(draft: InvoiceDraft, issues: DraftIssue[]): void {
       field: 'iban',
       severity: 'error',
       message: `L'IBAN « ${draft.iban} » est incorrect : sa clé de contrôle ne correspond pas. Une facture avec un IBAN erroné est valide au sens de la norme mais ne sera pas payée.`,
+    });
+  }
+
+  // BR-CO-27. A credit transfer has to say which account to credit; the other payment means do
+  // not. Checked here rather than left to the engine because the engine's verdict arrives as a
+  // failed self-validation - which is reported as a server fault, correctly, since it means we
+  // generated something invalid. A missing IBAN is the user's to fix, so it has to be caught
+  // before generation and named in French.
+  if (CREDIT_TRANSFER_MEANS.includes(draft.paymentMeansCode ?? '') && !draft.iban?.trim()) {
+    issues.push({
+      field: 'iban',
+      severity: 'error',
+      message:
+        "Un virement est indiqué comme moyen de paiement, mais aucun IBAN n'est renseigné. La norme impose de préciser le compte à créditer (BT-84). Indiquez un IBAN, ou choisissez un autre moyen de paiement.",
+      ruleId: 'BR-CO-27',
     });
   }
 }

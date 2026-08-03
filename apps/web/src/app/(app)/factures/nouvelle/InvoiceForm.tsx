@@ -79,6 +79,10 @@ export function InvoiceForm({
   const [lines, setLines] = useState<LineDraft[]>([blankLine(0)]);
   const [nextKey, setNextKey] = useState(1);
   const [prepaid, setPrepaid] = useState('');
+  const [paymentMeans, setPaymentMeans] = useState('30');
+
+  /** UNTDID 4461 credit-transfer codes, the ones BR-CO-27 obliges to carry an account. */
+  const ibanRequired = paymentMeans === '30' || paymentMeans === '58';
 
   const update = (key: number, patch: Partial<LineDraft>): void => {
     setLines((current) =>
@@ -426,17 +430,41 @@ export function InvoiceForm({
 
         <div className="grid gap-5 sm:grid-cols-2">
           <Field label="Moyen de paiement" name="paymentMeansCode">
-            <Select name="paymentMeansCode" defaultValue="30">
+            <Select
+              name="paymentMeansCode"
+              value={paymentMeans}
+              onChange={(event) => setPaymentMeans(event.target.value)}
+            >
               <option value="30">Virement</option>
               <option value="48">Carte bancaire</option>
               <option value="49">Prélèvement</option>
               <option value="10">Espèces</option>
               <option value="20">Chèque</option>
+              <option value="1">Non précisé</option>
             </Select>
           </Field>
 
-          <Field label="IBAN" name="iban" hint="Le compte à créditer (BT-84).">
-            <TextInput name="iban" placeholder="FR76 3000 6000 0112 3456 7890 189" />
+          {/*
+            BR-CO-27: a credit transfer must name the account to credit. Marked required in the
+            markup so the browser says so before the form is submitted - the server refuses it
+            either way, but being told after a round trip through PDF generation and a Schematron
+            run is a much worse way to learn it.
+          */}
+          <Field
+            label="IBAN"
+            name="iban"
+            required={ibanRequired}
+            hint={
+              ibanRequired
+                ? 'Le compte à créditer (BT-84). Obligatoire pour un virement.'
+                : 'Le compte à créditer (BT-84).'
+            }
+          >
+            <TextInput
+              name="iban"
+              required={ibanRequired}
+              placeholder="FR76 3000 6000 0112 3456 7890 189"
+            />
           </Field>
         </div>
 

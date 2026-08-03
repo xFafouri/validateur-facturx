@@ -219,7 +219,10 @@ export function serialiseCii(
         el('ram:ApplicableHeaderTradeSettlement', [
           leaf('ram:InvoiceCurrencyCode', currency),
           el('ram:SpecifiedTradeSettlementPaymentMeans', [
-            leaf('ram:TypeCode', draft.paymentMeansCode ?? '30'),
+            // Defaulting to `30` (credit transfer) was wrong: BR-CO-27 then requires an account,
+            // so a draft that simply did not mention how it would be paid produced an invalid
+            // document. When nothing is stated, the honest code is `1`, instrument not defined.
+            leaf('ram:TypeCode', draft.paymentMeansCode ?? (draft.iban ? '30' : '1')),
             draft.iban
               ? el('ram:PayeePartyCreditorFinancialAccount', [
                   leaf('ram:IBANID', draft.iban.replace(/[\s-]/g, '').toUpperCase()),

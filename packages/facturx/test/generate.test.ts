@@ -120,6 +120,32 @@ describe('checkDraft', () => {
     );
   });
 
+  /**
+   * Regression. A credit transfer must name the account to credit (BR-CO-27), and nothing checked
+   * it, so the engine caught it instead - which surfaces as a failed self-validation, i.e. a 500,
+   * for what is really a field the user forgot. The codes come from the engine's own verdicts:
+   * `30` and `58` are refused without an account, cash, cheque, card and direct debit are not.
+   */
+  it('refuses a credit transfer with no IBAN, and only for the transfer codes', () => {
+    for (const paymentMeansCode of ['30', '58']) {
+      const result = checkDraft(draftWith({ paymentMeansCode, iban: null }));
+      const issue = result.issues.find((candidate) => candidate.ruleId === 'BR-CO-27');
+      expect(issue?.severity, `code ${paymentMeansCode}`).toBe('error');
+      expect(result.ok).toBe(false);
+    }
+
+    for (const paymentMeansCode of ['10', '20', '48', '49']) {
+      const result = checkDraft(draftWith({ paymentMeansCode, iban: null }));
+      expect(
+        result.issues.some((candidate) => candidate.ruleId === 'BR-CO-27'),
+        `code ${paymentMeansCode}`,
+      ).toBe(false);
+    }
+
+    // BASE_DRAFT already pairs code 30 with an IBAN, which is the combination that must pass.
+    expect(checkDraft(BASE_DRAFT).ok).toBe(true);
+  });
+
   /** Warns, without refusing: the text still reaches the reader, just not the reader's software. */
   it('warns that a line description will not reach the XML', () => {
     const result = checkDraft(

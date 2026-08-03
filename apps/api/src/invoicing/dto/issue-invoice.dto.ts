@@ -171,8 +171,10 @@ export class IssueInvoiceDto {
   @Type(() => DraftLineDto)
   lines!: DraftLineDto[];
 
+  // One or two digits: UNTDID 4461 has single-digit codes, and `1` (instrument not defined) is
+  // the one a caller reaches for when the invoice does not say how it will be paid.
   @IsOptional()
-  @Matches(/^\d{2}$/, { message: 'paymentMeansCode doit être un code UNTDID 4461.' })
+  @Matches(/^\d{1,2}$/, { message: 'paymentMeansCode doit être un code UNTDID 4461.' })
   paymentMeansCode?: string;
 
   @IsOptional()

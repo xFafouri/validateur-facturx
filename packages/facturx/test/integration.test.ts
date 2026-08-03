@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 import { analyze } from '../src/analyze.js';
 import { MustangEngine } from '../src/engine/mustang.js';
+import { checkDraft } from '../src/generate/check-draft.js';
 import { resolveSystemFonts } from '../src/generate/fonts.js';
 import { generateCiiXml, generateFacturX } from '../src/generate/index.js';
 import { buildInvoiceBytes } from './fixtures/builder.js';
@@ -220,6 +221,32 @@ suite('generated documents, validated by the engine', () => {
     expect(result.counts.errors).toBe(0);
     // The description is warned about at draft time, not silently swallowed.
     expect(generated.warnings.map((warning) => warning.field)).toContain('lines.0.description');
+  });
+
+  /**
+   * The other half of the BR-CO-27 regression: a draft that says nothing about how it will be
+   * paid used to be serialised as a credit transfer with no account, which the engine rejects.
+   * It is now `1`, instrument not defined, and this proves the engine accepts that.
+   */
+  it('accepts an invoice that does not state how it will be paid', async () => {
+    const draft = draftWith({
+      invoiceNumber: 'FA-2026-0094',
+      paymentMeansCode: undefined,
+      iban: null,
+    });
+    expect(checkDraft(draft).ok).toBe(true);
+
+    const generated = await generateFacturX(draft, { fonts: fonts!, now: FIXED_NOW });
+    const result = await analyze(generated.pdf, 'facture-sans-moyen.pdf', { engine });
+
+    if (result.verdict !== 'conforme') {
+      console.error(
+        'findings:',
+        result.findings.map((f) => `${f.ruleId}: ${f.message}`),
+      );
+    }
+    expect(result.verdict).toBe('conforme');
+    expect(result.counts.errors).toBe(0);
   });
 
   it('accepts an invoice mixing VAT rates, a reverse charge and a deposit', async () => {
