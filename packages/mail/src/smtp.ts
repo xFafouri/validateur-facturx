@@ -42,6 +42,28 @@ export interface SmtpOptions {
 /** Long enough for a slow relay, short enough that a person is not left waiting on a dead one. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/**
+ * What to check, based on how the relay failed.
+ *
+ * Three failures dominate and they need three different actions, so a single catch-all message
+ * sends people to look in the wrong place. The codes come from nodemailer, which surfaces the
+ * SMTP reply code as `responseCode`.
+ */
+function hintFor(cause: unknown): string {
+  const error = cause as { code?: string; responseCode?: number } | null;
+
+  if (error?.code === 'ETIMEDOUT' || error?.code === 'ESOCKET' || error?.code === 'ECONNREFUSED') {
+    return "Le relais n'a pas répondu. Le port SMTP sortant est bloqué sur beaucoup de réseaux (CI, conteneurs, certains fournisseurs d'accès) : testez-le depuis une machine où il est ouvert.";
+  }
+  if (error?.responseCode === 535 || error?.code === 'EAUTH') {
+    return "Identifiants refusés. Vérifiez SMTP_USER et SMTP_PASSWORD - la clé SMTP n'est pas le mot de passe du compte.";
+  }
+  if (error?.responseCode === 550 || error?.responseCode === 553) {
+    return "Adresse d'expéditeur refusée. Le fournisseur ne relaie que pour un expéditeur validé : validez l'adresse de MAIL_FROM chez lui, ou authentifiez le domaine.";
+  }
+  return 'Vérifiez que le relais est joignable, que les identifiants sont corrects et que MAIL_FROM est un expéditeur validé.';
+}
+
 export class SmtpMailTransport implements MailTransport {
   readonly key = 'smtp';
 
@@ -76,7 +98,7 @@ export class SmtpMailTransport implements MailTransport {
       // "Connection timeout", which tells whoever reads the log nothing about what to check.
       const detail = cause instanceof Error ? cause.message : String(cause);
       throw new Error(
-        `Envoi impossible via ${this.host}:${this.port} — ${detail}. Vérifiez que le relais est joignable (le port SMTP sortant est souvent bloqué) et que les identifiants sont corrects.`,
+        `Envoi impossible via ${this.host}:${this.port} — ${detail}. ${hintFor(cause)}`,
         { cause },
       );
     }
