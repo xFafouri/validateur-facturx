@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { api, ApiError, type ClientOrgSummary, type InvoiceListPage } from '@/lib/api';
+import { can } from '@facturx/auth';
 import { Alert } from '@/components/ui/Form';
+import { requireUser } from '@/lib/session';
 import { InvoiceTable } from '@/components/app/InvoiceTable';
 
 export const metadata: Metadata = { title: 'Factures' };
@@ -14,6 +16,7 @@ export default async function InvoicesPage({
 }: {
   searchParams: Promise<{ clientOrgId?: string; page?: string; direction?: string }>;
 }) {
+  const actor = await requireUser();
   const params = await searchParams;
   const page = Math.max(1, Number(params.page ?? '1') || 1);
   const skip = (page - 1) * PAGE_SIZE;
@@ -53,7 +56,7 @@ export default async function InvoicesPage({
             {result.total > 1 ? 's' : ''} dans votre archive.
           </p>
         </div>
-        {clientOrgs.length > 0 ? (
+        {clientOrgs.length > 0 && can(actor.role, 'invoice:issue') ? (
           <Link
             href="/factures/nouvelle"
             className="rounded bg-navy-800 px-3 py-2 text-sm font-semibold text-white hover:bg-navy-900"

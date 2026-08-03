@@ -20,19 +20,23 @@ import {
 } from '@nestjs/common';
 import { sirenFromSiret, validateSiren, validateSiret } from '@facturx/core';
 import type { AuthenticatedUser } from '@facturx/auth';
+import { PermissionGuard, RequirePermission } from '../auth/permission.guard';
+import { clientOrgIdScope } from '../auth/scope';
 import { CurrentUser, SessionGuard } from '../auth/session.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClientOrgDto } from './dto/client-org.dto';
 
 @Controller('client-orgs')
-@UseGuards(SessionGuard)
+@UseGuards(SessionGuard, PermissionGuard)
 export class ClientOrgsController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get()
+  @RequirePermission('clientOrg:read')
   async list(@CurrentUser() user: AuthenticatedUser) {
     return this.prisma.clientOrg.findMany({
-      where: { tenantId: user.tenantId, archivedAt: null },
+      // Scope as a predicate, not a filter over results - see `scope.ts`.
+      where: { tenantId: user.tenantId, archivedAt: null, ...clientOrgIdScope(user) },
       orderBy: { name: 'asc' },
       select: {
         id: true,
@@ -52,9 +56,10 @@ export class ClientOrgsController {
   }
 
   @Get(':id')
+  @RequirePermission('clientOrg:read')
   async detail(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     const clientOrg = await this.prisma.clientOrg.findFirst({
-      where: { id, tenantId: user.tenantId },
+      where: { id, tenantId: user.tenantId, ...clientOrgIdScope(user) },
     });
     if (!clientOrg) throw new NotFoundException('Entreprise cliente introuvable.');
     return clientOrg;
@@ -62,6 +67,7 @@ export class ClientOrgsController {
 
   @Post()
   @HttpCode(201)
+  @RequirePermission('clientOrg:create')
   async create(@CurrentUser() user: AuthenticatedUser, @Body() body: CreateClientOrgDto) {
     const siret = body.siret?.trim() || null;
     const siren = body.siren.trim();

@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { PermissionGuard } from './permission.guard';
 import { SessionGuard } from './session.guard';
 
 /**
@@ -11,7 +12,7 @@ import { SessionGuard } from './session.guard';
  */
 @Global()
 @Module({
-  providers: [SessionGuard],
-  exports: [SessionGuard],
+  providers: [SessionGuard, PermissionGuard],
+  exports: [SessionGuard, PermissionGuard],
 })
 export class AuthModule {}

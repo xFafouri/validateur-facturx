@@ -39,6 +39,17 @@ export {
 export type { AuthenticatedUser, IssuedSession, SessionDb, SessionOrigin } from './session.js';
 
 export {
+  can,
+  isClientOrgAllowed,
+  isScopedRole,
+  permissionDeniedMessage,
+  ROLE_DESCRIPTIONS,
+  ROLE_LABELS,
+  ROLE_PERMISSIONS,
+} from './permissions.js';
+export type { Authorisable, Permission } from './permissions.js';
+
+export {
   authenticate,
   looksLikeEmail,
   normaliseEmail,

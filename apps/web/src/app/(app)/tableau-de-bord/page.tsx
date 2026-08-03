@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { api, ApiError, type ClientOrgSummary, type InvoiceListPage } from '@/lib/api';
+import { can } from '@facturx/auth';
 import { Alert } from '@/components/ui/Form';
+import { requireUser } from '@/lib/session';
 import { InvoiceTable } from '@/components/app/InvoiceTable';
 
 export const metadata: Metadata = { title: "Vue d'ensemble" };
@@ -11,6 +13,9 @@ export const dynamic = 'force-dynamic';
 const MANDATE_DATE = new Date('2026-09-01T00:00:00+02:00');
 
 export default async function DashboardPage() {
+  const actor = await requireUser();
+  const mayIssue = can(actor.role, 'invoice:issue');
+  const mayAddClient = can(actor.role, 'clientOrg:create');
   let clientOrgs: ClientOrgSummary[];
   let recent: InvoiceListPage;
   let received: InvoiceListPage;
@@ -47,7 +52,7 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      {clientOrgs.length === 0 ? (
+      {clientOrgs.length === 0 && mayAddClient ? (
         <Alert tone="info" title="Commencez par ajouter une entreprise">
           <p>
             Une facture est émise <em>au nom d&apos;une entreprise</em> : c&apos;est elle qui figure
@@ -100,7 +105,7 @@ export default async function DashboardPage() {
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-navy-900">Dernières factures émises</h2>
-          {clientOrgs.length > 0 ? (
+          {clientOrgs.length > 0 && mayIssue ? (
             <Link
               href="/factures/nouvelle"
               className="rounded bg-navy-800 px-3 py-1.5 text-sm font-semibold text-white hover:bg-navy-900"

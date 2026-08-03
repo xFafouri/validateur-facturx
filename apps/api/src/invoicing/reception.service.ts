@@ -38,6 +38,16 @@ import { ISSUANCE_ENGINE } from './issuance.service';
 
 export interface ReceiveRequest {
   readonly tenantId: string;
+  /**
+   * Client businesses the caller may file against, or `null` when unrestricted.
+   *
+   * Reception routes by the *document's* buyer, so unlike issuance there is no caller-supplied
+   * client org to check before the work starts - scope can only be applied once the analysis says
+   * where the invoice would land. Passing `undefined` is not the same as `null`: it is treated as
+   * unrestricted for internal callers such as a future platform poller, and the parameter is
+   * required at the controller so a route cannot omit it by accident.
+   */
+  readonly allowedClientOrgIds?: readonly string[] | null;
   readonly bytes: Uint8Array;
   readonly filename: string;
   /** Where it came from: `upload` today, a platform adapter key later. */
@@ -147,6 +157,14 @@ export class ReceptionService {
     const invoice = analysis.invoice;
 
     const clientOrg = await this.routeToClientOrg(request.tenantId, invoice);
+
+    // Scope, applied after routing. A restricted user may deposit invoices for the businesses
+    // assigned to them and no others; the same refusal as an unroutable invoice, because from the
+    // caller's side an org they cannot see and an org that does not exist are the same thing.
+    const allowed = request.allowedClientOrgIds;
+    if (allowed !== undefined && allowed !== null && !allowed.includes(clientOrg.id)) {
+      throw new UnroutableInvoiceError(invoice.buyer);
+    }
 
     // Content hash before anything is written: re-receiving the same bytes is normal (a retry, a
     // forwarded email, a platform redelivering) and must not produce a second invoice.

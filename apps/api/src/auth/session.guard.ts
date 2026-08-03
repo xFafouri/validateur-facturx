@@ -23,10 +23,10 @@ import { readSessionToken, resolveSession, type AuthenticatedUser } from '@factu
 import type { Request } from 'express';
 import { PrismaService } from '../prisma/prisma.service';
 
-/** Property the guard writes the resolved caller onto. */
-const CURRENT_USER = Symbol('facturx.currentUser');
+/** Property the guard writes the resolved caller onto. Shared with `PermissionGuard`. */
+export const CURRENT_USER = Symbol('facturx.currentUser');
 
-type AuthenticatedRequest = Request & { [CURRENT_USER]?: AuthenticatedUser };
+export type AuthenticatedRequest = Request & { [CURRENT_USER]?: AuthenticatedUser };
 
 @Injectable()
 export class SessionGuard implements CanActivate {

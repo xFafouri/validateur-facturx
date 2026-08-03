@@ -266,3 +266,17 @@ export async function apiUpload(
   if (!response.ok) await raise(response);
   return (await response.json()) as ReceiveResponse;
 }
+
+export type UserRoleValue = 'OWNER' | 'ACCOUNTANT' | 'CLIENT_USER';
+
+export interface TenantUser {
+  id: string;
+  email: string;
+  name: string | null;
+  role: UserRoleValue;
+  disabledAt: string | null;
+  lastLoginAt: string | null;
+  createdAt: string;
+  scopedClientOrgs: { id: string; name: string }[];
+  isSelf: boolean;
+}

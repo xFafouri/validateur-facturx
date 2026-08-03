@@ -50,3 +50,11 @@ export interface ReceiveFormState {
 }
 
 export const NO_RECEIVE_STATE: ReceiveFormState = { error: null, result: null };
+
+/** User management reports in place; the list beneath it is revalidated on success. */
+export interface UserFormState {
+  readonly error: string | null;
+  readonly created: string | null;
+}
+
+export const NO_USER_STATE: UserFormState = { error: null, created: null };

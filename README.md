@@ -211,6 +211,50 @@ operator. Sessions, revocation and account disabling are all in place to support
 
 ---
 
+## Roles and access
+
+Three roles were modelled from the start and enforced nowhere, which meant every signed-in user of
+a tenant could see and do everything. For a product where one cabinet holds several unrelated
+businesses' books that is a liability rather than a missing feature: the whole point of
+`CLIENT_USER` is a login you can hand to a client without handing them their neighbours' books.
+
+|                        | `OWNER` | `ACCOUNTANT` | `CLIENT_USER`      |
+| ---------------------- | ------- | ------------ | ------------------ |
+| Read client businesses | all     | all          | **assigned only**  |
+| Add a client business  | ✅      | ✅           | ❌                 |
+| Read invoices          | all     | all          | **assigned only**  |
+| Issue an invoice       | ✅      | ✅           | ❌                 |
+| Receive an invoice     | ✅      | ✅           | ✅ (assigned only) |
+| Manage users           | ✅      | ❌           | ❌                 |
+
+`CLIENT_USER` cannot issue because issuing writes into a ten-year legal archive under the cabinet's
+numbering sequence, and a restricted login doing that unsupervised is the risk the role exists to
+avoid. It _can_ receive, because dropping in a supplier's invoice is exactly the errand you want a
+client running for themselves.
+
+**Permissions and scope are separate mechanisms and both are always required.** A permission check
+that passes says the role may issue invoices at all; it says nothing about on whose behalf. Scope
+is a predicate on every query — [`scope.ts`](apps/api/src/auth/scope.ts) — never a filter over
+results, for the same reason tenant isolation is not. The two failures the tests caught while this
+was being built are instructive, and both were _worse_ than having no check:
+
+- returning `{ id: { in: [...] } }` to be spread into a `where` **overwrote the id being looked
+  up**, so asking for a business outside scope returned a different business with a 200;
+- spreading a caller-supplied `clientOrgId` after the scope predicate let it **overwrite that
+  predicate**, which is a privilege escalation in three characters.
+
+Both are now nested under `AND`, which cannot collide with whatever else is in the object.
+
+Scope **fails closed**: a `CLIENT_USER` with no assignment sees nothing, because that is what a
+half-finished invitation looks like and "nothing" is the safe reading. Changing anyone's role or
+assignment revokes their sessions immediately, so a demoted user cannot keep working from a tab
+they left open.
+
+**Not built: invitation emails.** There is no mail transport, so an owner sets an initial password
+and passes it on out of band. Password reset has the same gap.
+
+---
+
 ## Receiving
 
 **Reception is the mirror image of issuance, and the asymmetry is deliberate.** Issuance refuses to
@@ -321,12 +365,14 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 | Default emitted profile | `BASIC` output, richer data retained internally     |
 | Scaffold                | Full monorepo, Phase 0 implemented                  |
 | Authentication          | Self-hosted: scrypt passwords, sessions in Postgres |
+| Authorisation           | Static role matrix + per-query client-org scope     |
 
 ### Still open
 
 Which certified platform to integrate first; hosting region and topology (**must be EU** — French
-tax data) and with it the production object store; Stripe price points. Password reset by email is
-not built — there is no mail transport yet, so a locked-out user currently needs an operator.
+tax data) and with it the production object store; Stripe price points. **No mail transport**,
+which is what blocks both password reset and invitation emails — an owner currently sets a new
+user's initial password and passes it on out of band, and a locked-out user needs an operator.
 
 ---
 

@@ -1,7 +1,9 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
 import { api, ApiError, type ClientOrgSummary } from '@/lib/api';
+import { can } from '@facturx/auth';
 import { Alert } from '@/components/ui/Form';
+import { requireUser } from '@/lib/session';
 import { formatSirenDisplay, formatSiretDisplay } from '@/lib/format';
 
 export const metadata: Metadata = { title: 'Entreprises clientes' };
@@ -12,7 +14,10 @@ export default async function ClientsPage({
 }: {
   searchParams: Promise<{ ajoutee?: string }>;
 }) {
+  const actor = await requireUser();
   const { ajoutee } = await searchParams;
+  const mayAdd = can(actor.role, 'clientOrg:create');
+  const mayIssue = can(actor.role, 'invoice:issue');
 
   let clientOrgs: ClientOrgSummary[];
   try {
@@ -34,12 +39,14 @@ export default async function ClientsPage({
             Les entreprises pour lesquelles vous émettez des factures.
           </p>
         </div>
-        <Link
-          href="/clients/nouveau"
-          className="rounded bg-navy-800 px-3 py-2 text-sm font-semibold text-white hover:bg-navy-900"
-        >
-          Ajouter une entreprise
-        </Link>
+        {mayAdd ? (
+          <Link
+            href="/clients/nouveau"
+            className="rounded bg-navy-800 px-3 py-2 text-sm font-semibold text-white hover:bg-navy-900"
+          >
+            Ajouter une entreprise
+          </Link>
+        ) : null}
       </div>
 
       {ajoutee ? (
@@ -51,13 +58,19 @@ export default async function ClientsPage({
 
       {clientOrgs.length === 0 ? (
         <div className="rounded-lg border border-dashed border-navy-200 bg-white px-6 py-10 text-center">
-          <p className="text-sm text-navy-600">Aucune entreprise cliente pour le moment.</p>
-          <Link
-            href="/clients/nouveau"
-            className="mt-3 inline-block text-sm font-semibold text-navy-800 underline"
-          >
-            Ajouter la première
-          </Link>
+          <p className="text-sm text-navy-600">
+            {mayAdd
+              ? 'Aucune entreprise cliente pour le moment.'
+              : 'Aucune entreprise ne vous a été attribuée. Contactez le cabinet qui gère votre compte.'}
+          </p>
+          {mayAdd ? (
+            <Link
+              href="/clients/nouveau"
+              className="mt-3 inline-block text-sm font-semibold text-navy-800 underline"
+            >
+              Ajouter la première
+            </Link>
+          ) : null}
         </div>
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
@@ -105,12 +118,14 @@ export default async function ClientsPage({
                 <span className="text-navy-500">
                   {org._count.invoices} facture{org._count.invoices > 1 ? 's' : ''}
                 </span>
-                <Link
-                  href={`/factures/nouvelle?clientOrgId=${org.id}`}
-                  className="font-medium text-navy-800 underline"
-                >
-                  Émettre une facture
-                </Link>
+                {mayIssue ? (
+                  <Link
+                    href={`/factures/nouvelle?clientOrgId=${org.id}`}
+                    className="font-medium text-navy-800 underline"
+                  >
+                    Émettre une facture
+                  </Link>
+                ) : null}
               </div>
             </li>
           ))}

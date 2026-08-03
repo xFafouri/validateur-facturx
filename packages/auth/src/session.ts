@@ -18,6 +18,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Prisma, PrismaClient, UserRole } from '@prisma/client';
+import { isScopedRole } from './permissions.js';
 
 /** Rolling lifetime. Extended while the session is used, so an active user is not logged out. */
 export const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -49,6 +50,15 @@ export interface AuthenticatedUser {
   readonly name: string | null;
   readonly role: UserRole;
   readonly sessionId: string;
+  /**
+   * Client businesses this user may reach, or `null` when unrestricted.
+   *
+   * Resolved here rather than looked up per request in each service, so that a query which forgets
+   * to apply scope is a visible omission rather than a missing round trip nobody notices. An empty
+   * array means a scoped user with nothing assigned, who must see nothing - which is different
+   * from `null`, and the difference is the whole point.
+   */
+  readonly clientOrgIds: readonly string[] | null;
 }
 
 export interface SessionOrigin {
@@ -138,6 +148,10 @@ export async function resolveSession(
           name: true,
           role: true,
           disabledAt: true,
+          // Joined on every request. It is a small table keyed by user, and the alternative -
+          // fetching it only for scoped roles - means a second round trip on the one path where
+          // getting scope wrong leaks another client's books.
+          scopedClientOrgs: { select: { clientOrgId: true } },
         },
       },
     },
@@ -168,6 +182,9 @@ export async function resolveSession(
     name: session.user.name,
     role: session.user.role,
     sessionId: session.id,
+    clientOrgIds: isScopedRole(session.user.role)
+      ? session.user.scopedClientOrgs.map((scope) => scope.clientOrgId)
+      : null,
   };
 }
 

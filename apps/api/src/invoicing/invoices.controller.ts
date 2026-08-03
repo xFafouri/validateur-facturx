@@ -35,6 +35,8 @@ import { DraftInvalidError } from '@facturx/core';
 import type { Prisma } from '@prisma/client';
 import type { Response } from 'express';
 import type { AuthenticatedUser } from '@facturx/auth';
+import { PermissionGuard, RequirePermission } from '../auth/permission.guard';
+import { assertClientOrgWritable, clientOrgScope } from '../auth/scope';
 import { CurrentUser, SessionGuard } from '../auth/session.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { ArchivingService } from '../archiving/archiving.service';
@@ -69,7 +71,7 @@ function amount(value: Prisma.Decimal | null): string | null {
 }
 
 @Controller('invoices')
-@UseGuards(SessionGuard)
+@UseGuards(SessionGuard, PermissionGuard)
 export class InvoicesController {
   private readonly logger = new Logger(InvoicesController.name);
 
@@ -87,8 +89,13 @@ export class InvoicesController {
    */
   @Post()
   @HttpCode(201)
+  @RequirePermission('invoice:issue')
   async issue(@CurrentUser() user: AuthenticatedUser, @Body() body: IssueInvoiceDto) {
     const { clientOrgId, ...draft } = body;
+
+    // Permission says this role may issue; scope says on whose behalf. Checked before the
+    // generator runs, so a refused request costs nothing.
+    assertClientOrgWritable(user, clientOrgId);
 
     try {
       const result = await this.issuance.issue({
@@ -110,6 +117,7 @@ export class InvoicesController {
   }
 
   @Get()
+  @RequirePermission('invoice:read')
   async list(
     @CurrentUser() user: AuthenticatedUser,
     @Query('clientOrgId') clientOrgId?: string,
@@ -126,6 +134,9 @@ export class InvoicesController {
     // the whole row returned.
     const where: Prisma.InvoiceWhereInput = {
       tenantId: user.tenantId,
+      // Scope nests under `AND`, so a caller-supplied `clientOrgId` can only narrow within it.
+      // Spreading a bare `clientOrgId` key here previously overwrote the scope predicate outright.
+      ...clientOrgScope(user),
       ...(clientOrgId ? { clientOrgId } : {}),
       ...(wanted ? { direction: wanted } : {}),
     };
@@ -178,9 +189,10 @@ export class InvoicesController {
   }
 
   @Get(':id')
+  @RequirePermission('invoice:read')
   async detail(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
     const invoice = await this.prisma.invoice.findFirst({
-      where: { id, tenantId: user.tenantId },
+      where: { id, tenantId: user.tenantId, ...clientOrgScope(user) },
       include: {
         clientOrg: { select: { id: true, name: true, siren: true } },
         seller: true,
@@ -242,6 +254,7 @@ export class InvoicesController {
    * user must be told the archive is compromised, not handed a document that silently changed.
    */
   @Get(':id/artifacts/:kind')
+  @RequirePermission('invoice:download')
   async download(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
@@ -254,7 +267,7 @@ export class InvoicesController {
     }
 
     const invoice = await this.prisma.invoice.findFirst({
-      where: { id, tenantId: user.tenantId },
+      where: { id, tenantId: user.tenantId, ...clientOrgScope(user) },
       select: { id: true, invoiceNumber: true },
     });
     if (!invoice) throw new NotFoundException('Facture introuvable.');

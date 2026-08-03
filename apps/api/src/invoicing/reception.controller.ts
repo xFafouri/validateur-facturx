@@ -27,6 +27,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { AuthenticatedUser } from '@facturx/auth';
+import { PermissionGuard, RequirePermission } from '../auth/permission.guard';
 import { CurrentUser, SessionGuard } from '../auth/session.guard';
 import {
   ReceptionService,
@@ -38,7 +39,7 @@ import {
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
 @Controller('invoices')
-@UseGuards(SessionGuard)
+@UseGuards(SessionGuard, PermissionGuard)
 export class ReceptionController {
   private readonly logger = new Logger(ReceptionController.name);
 
@@ -52,6 +53,7 @@ export class ReceptionController {
    */
   @Post('reception')
   @HttpCode(200)
+  @RequirePermission('invoice:receive')
   @Header('Cache-Control', 'no-store')
   async receive(
     @CurrentUser() user: AuthenticatedUser,
@@ -71,6 +73,10 @@ export class ReceptionController {
     try {
       const result = await this.reception.receive({
         tenantId: user.tenantId,
+        // Which businesses this caller may file against. Reception routes by the *document's*
+        // buyer, so scope cannot be checked before the analysis - the service applies it once it
+        // knows where the invoice would land.
+        allowedClientOrgIds: user.clientOrgIds,
         bytes: new Uint8Array(body),
         // Only ever used to label the document; never used to open a path.
         filename: (filename ?? 'facture').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120),

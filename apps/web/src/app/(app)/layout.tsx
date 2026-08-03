@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
+import { can, ROLE_LABELS } from '@facturx/auth';
 import { requireUser } from '@/lib/session';
 import { signOut } from '../(auth)/actions';
 
@@ -10,17 +11,23 @@ export const metadata: Metadata = {
 
 export const dynamic = 'force-dynamic';
 
+/** `permission` omitted means every signed-in user sees the link. */
 const NAV = [
   { href: '/tableau-de-bord', label: "Vue d'ensemble" },
   { href: '/clients', label: 'Entreprises clientes' },
   { href: '/factures', label: 'Factures émises' },
   { href: '/reception', label: 'Factures reçues' },
-];
+  { href: '/utilisateurs', label: 'Utilisateurs', permission: 'user:manage' },
+] as const;
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // Every page under this layout is behind it. Guarding here rather than page by page means a new
   // page cannot be added unguarded by accident.
   const user = await requireUser();
+
+  // Hiding a link is presentation, not protection - the API refuses the route regardless. It is
+  // still worth doing: an accountant should not be shown a door that will not open.
+  const nav = NAV.filter((item) => !('permission' in item) || can(user.role, item.permission));
 
   return (
     <div className="flex min-h-screen flex-col bg-navy-50">
@@ -35,7 +42,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </Link>
 
             <nav aria-label="Navigation principale" className="hidden gap-5 text-sm sm:flex">
-              {NAV.map((item) => (
+              {nav.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}
@@ -50,6 +57,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <div className="flex items-center gap-4 text-sm">
             <span className="hidden text-navy-500 md:inline" title={user.email}>
               {user.name ?? user.email}
+              <span className="ml-2 rounded bg-navy-50 px-1.5 py-0.5 text-xs text-navy-600">
+                {ROLE_LABELS[user.role]}
+              </span>
             </span>
             <form action={signOut}>
               <button type="submit" className="text-navy-600 underline hover:text-navy-900">
@@ -63,7 +73,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           aria-label="Navigation principale"
           className="container-page flex gap-5 pb-3 text-sm sm:hidden"
         >
-          {NAV.map((item) => (
+          {nav.map((item) => (
             <Link key={item.href} href={item.href} className="text-navy-600 hover:text-navy-900">
               {item.label}
             </Link>
