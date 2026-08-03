@@ -104,6 +104,15 @@ model User {
   name     String?
   role     UserRole @default(ACCOUNTANT)
 
+  /// scrypt digest, in the self-describing format written by `@facturx/auth`. Null for a user
+  /// who has been invited but has not yet set a password; such a user cannot sign in.
+  passwordHash String?
+
+  /// Set to lock an account out without deleting it. Deleting is not an option: the audit log
+  /// references users by id, and an audit trail with dangling actors is not an audit trail.
+  disabledAt  DateTime?
+  lastLoginAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -111,8 +120,46 @@ model User {
 
   /// When set, this user may only see these client orgs - used for client-user logins.
   scopedClientOrgs ClientOrgUser[]
+  sessions         Session[]
 
   @@index([tenantId])
+}
+
+/// A signed-in browser session.
+///
+/// Opaque server-side sessions rather than a self-contained token, for two reasons. First,
+/// revocation: signing out, disabling an account or responding to a stolen laptop must take
+/// effect immediately, and a stateless token stays valid until it expires no matter what the
+/// database says. Second, the API verifies callers by reading this table directly, so identity
+/// never has to be asserted by the web tier across a trust boundary.
+///
+/// `tokenHash` stores SHA-256 of the cookie value, never the value itself: a leaked backup or a
+/// stray query log then yields no usable session. Plain SHA-256 is the right primitive here and
+/// scrypt would not be - the token is 256 bits of CSPRNG output, so there is no guessable
+/// preimage to slow an attacker down over.
+model Session {
+  id     String @id @default(cuid())
+  userId String
+
+  /// Hex-encoded SHA-256 of the opaque session token held by the client.
+  tokenHash String @unique
+
+  expiresAt DateTime
+  /// Set on sign-out. The row is kept rather than deleted so that "when did this session end"
+  /// remains answerable during an incident review.
+  revokedAt DateTime?
+
+  /// Refreshed lazily, not on every request - see the note on idle rotation in `@facturx/auth`.
+  lastSeenAt DateTime @default(now())
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
 
 /// An end business whose invoicing the tenant manages.
