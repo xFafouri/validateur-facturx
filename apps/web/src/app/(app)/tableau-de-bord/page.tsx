@@ -3,7 +3,6 @@ import type { Metadata } from 'next';
 import { api, ApiError, type ClientOrgSummary, type InvoiceListPage } from '@/lib/api';
 import { Alert } from '@/components/ui/Form';
 import { InvoiceTable } from '@/components/app/InvoiceTable';
-import { formatEuros } from '@/lib/format';
 
 export const metadata: Metadata = { title: "Vue d'ensemble" };
 export const dynamic = 'force-dynamic';
@@ -14,11 +13,13 @@ const MANDATE_DATE = new Date('2026-09-01T00:00:00+02:00');
 export default async function DashboardPage() {
   let clientOrgs: ClientOrgSummary[];
   let recent: InvoiceListPage;
+  let received: InvoiceListPage;
 
   try {
-    [clientOrgs, recent] = await Promise.all([
+    [clientOrgs, recent, received] = await Promise.all([
       api<ClientOrgSummary[]>('/client-orgs'),
-      api<InvoiceListPage>('/invoices?take=5'),
+      api<InvoiceListPage>('/invoices?direction=ISSUED&take=5'),
+      api<InvoiceListPage>('/invoices?direction=RECEIVED&take=5'),
     ]);
   } catch (error) {
     const message =
@@ -31,10 +32,9 @@ export default async function DashboardPage() {
   }
 
   const daysToMandate = Math.ceil((MANDATE_DATE.getTime() - Date.now()) / 86_400_000);
-  const issuedTotal = recent.invoices.reduce(
-    (sum, invoice) => sum + Number(invoice.grandTotalAmount),
-    0,
-  );
+  const nonConforming = received.invoices.filter(
+    (invoice) => invoice.lastValidationValid === false,
+  ).length;
 
   return (
     <div className="space-y-8">
@@ -64,17 +64,42 @@ export default async function DashboardPage() {
 
       <section className="grid gap-4 sm:grid-cols-3">
         <Stat label="Entreprises clientes" value={String(clientOrgs.length)} href="/clients" />
-        <Stat label="Factures émises" value={String(recent.total)} href="/factures" />
         <Stat
-          label="Montant TTC (5 dernières)"
-          value={formatEuros(issuedTotal.toFixed(2))}
-          href="/factures"
+          label="Factures émises"
+          value={String(recent.total)}
+          href="/factures?direction=ISSUED"
         />
+        <Stat label="Factures reçues" value={String(received.total)} href="/reception" />
+      </section>
+
+      {nonConforming > 0 ? (
+        <Alert tone="warn" title="Des factures reçues ne sont pas conformes">
+          <p>
+            {nonConforming} des dernières factures reçues comporte
+            {nonConforming > 1 ? 'nt' : ''} des erreurs de conformité. Elles sont archivées telles
+            quelles ; il revient à leur émetteur de les rectifier.
+          </p>
+          <p className="mt-2">
+            <Link href="/reception" className="font-semibold underline">
+              Voir les factures reçues
+            </Link>
+          </p>
+        </Alert>
+      ) : null}
+
+      <section>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-navy-900">Dernières factures reçues</h2>
+          <Link href="/reception" className="text-sm font-medium text-navy-800 underline">
+            Déposer une facture reçue
+          </Link>
+        </div>
+        <InvoiceTable invoices={received.invoices} direction="RECEIVED" />
       </section>
 
       <section>
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-navy-900">Dernières factures</h2>
+          <h2 className="text-lg font-semibold text-navy-900">Dernières factures émises</h2>
           {clientOrgs.length > 0 ? (
             <Link
               href="/factures/nouvelle"
@@ -84,7 +109,7 @@ export default async function DashboardPage() {
             </Link>
           ) : null}
         </div>
-        <InvoiceTable invoices={recent.invoices} />
+        <InvoiceTable invoices={recent.invoices} direction="ISSUED" />
       </section>
     </div>
   );

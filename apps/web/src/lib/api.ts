@@ -116,19 +116,28 @@ export interface ClientOrgSummary {
   _count: { invoices: number };
 }
 
+export type InvoiceDirection = 'ISSUED' | 'RECEIVED';
+
 export interface InvoiceSummary {
   id: string;
   invoiceNumber: string;
   typeCode: string;
+  direction: InvoiceDirection;
   state: string;
   issueDate: string;
   dueDate: string | null;
   currency: string;
-  grandTotalAmount: string;
-  duePayableAmount: string;
+  /** Null when a received invoice did not state the total; never invented. */
+  grandTotalAmount: string | null;
+  duePayableAmount: string | null;
   lastValidationValid: boolean | null;
+  validationErrorCount: number | null;
+  receivedAt: string | null;
   clientOrg: { id: string; name: string };
+  seller: { name: string };
   buyer: { name: string };
+  /** Whom we billed, or who billed us. */
+  counterpartyName: string;
 }
 
 export interface InvoiceListPage {
@@ -146,14 +155,19 @@ export interface InvoiceDetail {
   currency: string;
   buyerReference: string | null;
   profile: string;
-  lineTotalAmount: string;
-  taxBasisTotalAmount: string;
-  taxTotalAmount: string;
-  grandTotalAmount: string;
-  prepaidAmount: string;
-  duePayableAmount: string;
+  direction: InvoiceDirection;
+  receivedAt: string | null;
+  sourceChannel: string | null;
+  lineTotalAmount: string | null;
+  taxBasisTotalAmount: string | null;
+  taxTotalAmount: string | null;
+  grandTotalAmount: string | null;
+  prepaidAmount: string | null;
+  duePayableAmount: string | null;
   lastValidationValid: boolean | null;
   lastValidatedAt: string | null;
+  validationErrorCount: number | null;
+  validationRuleIds: string[];
   clientOrg: { id: string; name: string; siren: string };
   seller: PartyRecord;
   buyer: PartyRecord;
@@ -209,4 +223,46 @@ export interface IssueResponse {
   invoiceNumber: string;
   contentHash: string;
   warnings: { message: string; severity: string }[];
+}
+
+export interface ReceiveResponse {
+  invoiceId: string;
+  invoiceNumber: string;
+  clientOrgId: string;
+  clientOrgName: string;
+  supplierName: string | null;
+  conforme: boolean;
+  duplicate: boolean;
+  verdict: 'conforme' | 'non-conforme' | 'indeterminé';
+  errorCount: number;
+  ruleIds: string[];
+}
+
+/**
+ * Uploads a received invoice.
+ *
+ * Sent as raw bytes rather than multipart: there is one file and no fields, and the API reads the
+ * body directly. `api()` is not reused because it serialises JSON.
+ */
+export async function apiUpload(
+  path: string,
+  bytes: ArrayBuffer,
+  contentType: string,
+): Promise<ReceiveResponse> {
+  const cookie = await sessionCookieHeader();
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      method: 'POST',
+      headers: { 'content-type': contentType, ...(cookie ? { cookie } : {}) },
+      body: bytes,
+      cache: 'no-store',
+    });
+  } catch {
+    throw new ApiError(503, 'Le service de facturation est injoignable. Réessayez plus tard.');
+  }
+
+  if (!response.ok) await raise(response);
+  return (await response.json()) as ReceiveResponse;
 }

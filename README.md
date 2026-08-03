@@ -4,11 +4,17 @@ A _Solution Compatible_ (SC) for France's 2026–2027 B2B e-invoicing mandate, a
 underserved long tail: micro-businesses, accountants managing many small clients, and niche
 software with no native e-invoicing.
 
-**Status: Phases 0 and 1 complete.** The free public validator runs, backed by a real Schematron
-engine, with every rule explained in French. Invoices are also _generated_ — PDF/A-3 with embedded
-`factur-x.xml` — self-validated against that same engine, persisted, and sealed into an immutable
-content-addressed archive. A signed-in user can now add the businesses they invoice for, issue an
-invoice through the UI, and download the sealed PDF and XML. See [Roadmap](#roadmap).
+**Status: Phases 0 and 1 complete; reception built.** The free public validator runs, backed by a
+real Schematron engine, with every rule explained in French. Invoices are _generated_ — PDF/A-3
+with embedded `factur-x.xml` — self-validated against that same engine, persisted, and sealed into
+an immutable content-addressed archive. A signed-in user can add the businesses they invoice for,
+issue an invoice through the UI, **receive supplier invoices**, and download the sealed documents.
+See [Roadmap](#roadmap).
+
+> **Why reception came before the rest of Phase 2.** The 1 September 2026 obligation that applies
+> to _every_ VAT-registered business is the obligation to **receive**. Issuing is phased: large
+> firms and ETI in 2026, SMEs and micro-businesses in 2027. For this product's target market the
+> receiving side is the deadline, and the issuing side is next year's problem.
 
 > **Scope boundary.** This is a _Solution Compatible_, **not** a _Plateforme Agréée_ (PA). It
 > creates and validates invoices and connects to an existing certified platform; it is not
@@ -205,6 +211,46 @@ operator. Sessions, revocation and account disabling are all in place to support
 
 ---
 
+## Receiving
+
+**Reception is the mirror image of issuance, and the asymmetry is deliberate.** Issuance refuses to
+write anything the engine has not accepted: we are the author, and an invoice we cannot verify is
+one we should not have produced. Reception cannot work that way. A supplier sends what a supplier
+sends; if it is malformed we have still received it. Refusing to record a non-conforming invoice
+would mean the document an accountant most needs to see — the broken one — is the one the system
+silently drops.
+
+So a received invoice is **stored whether or not it validates**, with the verdict and the rules
+that fired recorded beside it, and the original bytes sealed unmodified because they are the
+evidence of what the supplier actually sent. Two things are still refused, and both are refusals of
+a different kind: a file that cannot be read as an invoice at all, and an invoice addressed to a
+business this tenant does not manage.
+
+**Routing is by identity, never by name.** The buyer's SIRET is tried first, then the SIREN behind
+it — an invoice to one establishment belongs to the company we hold — then the VAT number. Two
+businesses share a name far more often than they share a SIREN, and an invoice filed into the wrong
+client's books is very hard to notice later.
+
+Receiving the same bytes twice is normal (a retry, a forwarded email, a platform redelivering) and
+is idempotent on the content hash.
+
+### What reception changed in the schema
+
+Two constraints were wrong as soon as invoices could arrive rather than only leave, and both are
+now partial indexes written by hand in [the migration](packages/db/prisma/migrations):
+
+- **Invoice-number uniqueness is an issuer's obligation.** The CGI requires unbroken, duplicate-free
+  numbering from the business _issuing_; it says nothing about what that business receives. The old
+  constraint spanned direction but not the counterparty, so a second supplier using `FA-2026-001`
+  was rejected as a duplicate. It is now unique per client org for issued invoices, and per client
+  org _and supplier_ for received ones.
+- **Totals became nullable.** A malformed received invoice may omit BT-112, and it has to be
+  recorded as omitting it — a fabricated `0,00 €` in front of an accountant is worse than a visible
+  gap. Nothing about issued invoices weakened: a `CHECK` constraint still requires every total when
+  `direction = 'ISSUED'`, so the guarantee moved from the code into the table.
+
+---
+
 ## Correctness notes
 
 **Money is never a float.** All amounts are exact `bigint`-backed decimals
@@ -258,8 +304,11 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
   Authentication ([`packages/auth`](packages/auth)) and the invoicing UI
   ([`apps/web/src/app/(app)`](apps/web/src/app)) close the phase: issuance is now behind a session
   guard that resolves the acting tenant from a session row, never from the request.
-- **Phase 2 — platform connection.** Transmit, receive, ingest lifecycle statuses behind
-  `PdpProvider`. Queue-based, idempotent.
+- **Phase 2 — platform connection.** 🚧 Reception is built
+  ([`reception.service.ts`](apps/api/src/invoicing/reception.service.ts)): a supplier invoice is
+  analysed, routed to the right client business by its buyer identifiers, recorded and sealed.
+  Still to build: transmission and lifecycle statuses behind `PdpProvider`, queue-based and
+  idempotent, and a transport other than manual upload.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
 - **Phase 4 — e-reporting, more platforms, embeddable API.**
 

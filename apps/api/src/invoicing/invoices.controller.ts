@@ -32,6 +32,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { DraftInvalidError } from '@facturx/core';
+import type { Prisma } from '@prisma/client';
 import type { Response } from 'express';
 import type { AuthenticatedUser } from '@facturx/auth';
 import { CurrentUser, SessionGuard } from '../auth/session.guard';
@@ -55,6 +56,17 @@ const DOWNLOADABLE = {
 type DownloadKind = keyof typeof DOWNLOADABLE;
 
 const MAX_PAGE_SIZE = 100;
+
+/**
+ * A NUMERIC column as an exact string, preserving null.
+ *
+ * Totals are nullable since reception landed: a supplier's invoice that omits BT-112 is recorded
+ * as omitting it. Coercing that to `0.00` here would put a figure an accountant could act on in
+ * front of them, invented by us.
+ */
+function amount(value: Prisma.Decimal | null): string | null {
+  return value === null ? null : value.toFixed(2);
+}
 
 @Controller('invoices')
 @UseGuards(SessionGuard)
@@ -101,12 +113,21 @@ export class InvoicesController {
   async list(
     @CurrentUser() user: AuthenticatedUser,
     @Query('clientOrgId') clientOrgId?: string,
+    @Query('direction') direction?: string,
     @Query('take', new DefaultValuePipe(50), ParseIntPipe) take = 50,
     @Query('skip', new DefaultValuePipe(0), ParseIntPipe) skip = 0,
   ) {
-    const where = {
+    // Unrecognised values are ignored rather than rejected: `direction` narrows a list, and the
+    // safe reading of a filter nobody understands is "no filter", not an error page.
+    const wanted = direction === 'ISSUED' || direction === 'RECEIVED' ? direction : undefined;
+
+    // Annotated rather than inferred: the conditional spreads otherwise produce a union that
+    // Prisma's overloads cannot narrow, and the silent consequence is `select` being ignored and
+    // the whole row returned.
+    const where: Prisma.InvoiceWhereInput = {
       tenantId: user.tenantId,
       ...(clientOrgId ? { clientOrgId } : {}),
+      ...(wanted ? { direction: wanted } : {}),
     };
 
     const [total, invoices] = await Promise.all([
@@ -120,6 +141,7 @@ export class InvoicesController {
           id: true,
           invoiceNumber: true,
           typeCode: true,
+          direction: true,
           state: true,
           issueDate: true,
           dueDate: true,
@@ -127,7 +149,10 @@ export class InvoicesController {
           grandTotalAmount: true,
           duePayableAmount: true,
           lastValidationValid: true,
+          validationErrorCount: true,
+          receivedAt: true,
           clientOrg: { select: { id: true, name: true } },
+          seller: { select: { name: true } },
           buyer: { select: { name: true } },
         },
       }),
@@ -138,11 +163,16 @@ export class InvoicesController {
       invoices: invoices.map((invoice) => ({
         ...invoice,
         // Prisma returns Decimal objects; serialising them as strings keeps the exact value that
-        // the NUMERIC column holds, which `JSON.stringify` of a Decimal would not.
-        grandTotalAmount: invoice.grandTotalAmount.toFixed(2),
-        duePayableAmount: invoice.duePayableAmount.toFixed(2),
+        // the NUMERIC column holds, which `JSON.stringify` of a Decimal would not. Null passes
+        // through as null: a received invoice that omitted a total must not be shown a zero.
+        grandTotalAmount: amount(invoice.grandTotalAmount),
+        duePayableAmount: amount(invoice.duePayableAmount),
         issueDate: invoice.issueDate.toISOString().slice(0, 10),
         dueDate: invoice.dueDate?.toISOString().slice(0, 10) ?? null,
+        receivedAt: invoice.receivedAt?.toISOString() ?? null,
+        // The party that is not us: whom we billed, or who billed us.
+        counterpartyName:
+          invoice.direction === 'RECEIVED' ? invoice.seller.name : invoice.buyer.name,
       })),
     };
   }
@@ -176,14 +206,18 @@ export class InvoicesController {
       ...invoice,
       issueDate: invoice.issueDate.toISOString().slice(0, 10),
       dueDate: invoice.dueDate?.toISOString().slice(0, 10) ?? null,
-      lineTotalAmount: invoice.lineTotalAmount.toFixed(2),
-      allowanceTotalAmount: invoice.allowanceTotalAmount.toFixed(2),
-      chargeTotalAmount: invoice.chargeTotalAmount.toFixed(2),
-      taxBasisTotalAmount: invoice.taxBasisTotalAmount.toFixed(2),
-      taxTotalAmount: invoice.taxTotalAmount.toFixed(2),
-      grandTotalAmount: invoice.grandTotalAmount.toFixed(2),
-      prepaidAmount: invoice.prepaidAmount.toFixed(2),
-      duePayableAmount: invoice.duePayableAmount.toFixed(2),
+      receivedAt: invoice.receivedAt?.toISOString() ?? null,
+      validationRuleIds: Array.isArray(invoice.validationRuleIds)
+        ? (invoice.validationRuleIds as string[])
+        : [],
+      lineTotalAmount: amount(invoice.lineTotalAmount),
+      allowanceTotalAmount: amount(invoice.allowanceTotalAmount),
+      chargeTotalAmount: amount(invoice.chargeTotalAmount),
+      taxBasisTotalAmount: amount(invoice.taxBasisTotalAmount),
+      taxTotalAmount: amount(invoice.taxTotalAmount),
+      grandTotalAmount: amount(invoice.grandTotalAmount),
+      prepaidAmount: amount(invoice.prepaidAmount),
+      duePayableAmount: amount(invoice.duePayableAmount),
       lines: invoice.lines.map((line) => ({
         ...line,
         quantity: line.quantity.toFixed(4),

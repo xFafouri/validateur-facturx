@@ -8,6 +8,7 @@ import {
   formatDate,
   formatDecimal,
   formatEuros,
+  formatOptionalEuros,
   formatSirenDisplay,
   INVOICE_STATE_LABELS,
   TYPE_CODE_LABELS,
@@ -66,11 +67,21 @@ export default async function InvoiceDetailPage({
               {TYPE_CODE_LABELS[invoice.typeCode] ?? 'Facture'} {invoice.invoiceNumber}
             </h1>
             <p className="mt-1 text-sm text-navy-600">
-              Émise par {invoice.clientOrg.name} le {formatDate(invoice.issueDate)}.
+              {invoice.direction === 'RECEIVED'
+                ? `Reçue de ${invoice.seller.name} pour ${invoice.clientOrg.name}, émise le ${formatDate(invoice.issueDate)}.`
+                : `Émise par ${invoice.clientOrg.name} le ${formatDate(invoice.issueDate)}.`}
             </p>
           </div>
-          <span className="rounded bg-signal-okBg px-2.5 py-1 text-xs font-medium text-signal-ok">
-            {INVOICE_STATE_LABELS[invoice.state] ?? invoice.state}
+          <span
+            className={`rounded px-2.5 py-1 text-xs font-medium ${
+              invoice.lastValidationValid === false
+                ? 'bg-signal-errorBg text-signal-error'
+                : 'bg-signal-okBg text-signal-ok'
+            }`}
+          >
+            {invoice.lastValidationValid === false
+              ? 'Non conforme'
+              : (INVOICE_STATE_LABELS[invoice.state] ?? invoice.state)}
           </span>
         </div>
       </div>
@@ -81,6 +92,53 @@ export default async function InvoiceDetailPage({
           empreinte SHA-256. Il est conservé dix ans et ne peut plus être modifié : une correction
           se fait par un avoir.
         </Alert>
+      ) : null}
+
+      {/*
+        Only ever shown for a received invoice. One we issued cannot be non-conforming: issuance
+        refuses to archive a document the engine did not accept, so there is no such row to land
+        on. A received one is stored exactly as it arrived, defects included.
+      */}
+      {invoice.direction === 'RECEIVED' && invoice.lastValidationValid === false ? (
+        <Alert tone="warn" title="Cette facture reçue n'est pas conforme">
+          <p>
+            Le moteur de validation a relevé {invoice.validationErrorCount ?? 0} erreur
+            {(invoice.validationErrorCount ?? 0) > 1 ? 's' : ''} sur ce document
+            {invoice.validationRuleIds.length > 0
+              ? ` : ${invoice.validationRuleIds.slice(0, 6).join(', ')}`
+              : ''}
+            .
+          </p>
+          <p className="mt-2">
+            Elle est conservée telle qu&apos;elle a été reçue — c&apos;est la pièce qui atteste de
+            ce que votre fournisseur a envoyé. Signalez-lui les anomalies pour qu&apos;il émette une
+            facture rectificative.
+          </p>
+          <p className="mt-2">
+            <Link href="/#validateur" className="font-semibold underline">
+              Analyser le détail des erreurs dans le validateur
+            </Link>
+          </p>
+        </Alert>
+      ) : null}
+
+      {invoice.direction === 'RECEIVED' ? (
+        <dl className="flex flex-wrap gap-x-8 gap-y-2 rounded-lg border border-navy-100 bg-white px-5 py-4 text-sm">
+          <div>
+            <dt className="text-xs text-navy-500">Reçue le</dt>
+            <dd className="text-navy-900">{formatDate(invoice.receivedAt?.slice(0, 10))}</dd>
+          </div>
+          <div>
+            <dt className="text-xs text-navy-500">Voie de réception</dt>
+            <dd className="text-navy-900">
+              {invoice.sourceChannel === 'upload' ? 'Dépôt manuel' : (invoice.sourceChannel ?? '—')}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-navy-500">Profil déclaré</dt>
+            <dd className="text-navy-900">{invoice.profile}</dd>
+          </div>
+        </dl>
       ) : null}
 
       <section className="grid gap-4 sm:grid-cols-2">
@@ -162,22 +220,28 @@ export default async function InvoiceDetailPage({
         <div className="rounded-lg border border-navy-100 bg-white p-5">
           <h2 className="text-sm font-semibold text-navy-900">Totaux</h2>
           <dl className="mt-3 space-y-2 text-sm">
-            <Row label="Total HT" value={formatEuros(invoice.lineTotalAmount, invoice.currency)} />
-            <Row label="TVA" value={formatEuros(invoice.taxTotalAmount, invoice.currency)} />
+            <Row
+              label="Total HT"
+              value={formatOptionalEuros(invoice.lineTotalAmount, invoice.currency)}
+            />
+            <Row
+              label="TVA"
+              value={formatOptionalEuros(invoice.taxTotalAmount, invoice.currency)}
+            />
             <Row
               label="Total TTC"
-              value={formatEuros(invoice.grandTotalAmount, invoice.currency)}
+              value={formatOptionalEuros(invoice.grandTotalAmount, invoice.currency)}
               strong
             />
-            {invoice.prepaidAmount !== '0.00' ? (
+            {invoice.prepaidAmount && invoice.prepaidAmount !== '0.00' ? (
               <Row
                 label="Acompte versé"
-                value={formatEuros(invoice.prepaidAmount, invoice.currency)}
+                value={formatOptionalEuros(invoice.prepaidAmount, invoice.currency)}
               />
             ) : null}
             <Row
               label="Net à payer"
-              value={formatEuros(invoice.duePayableAmount, invoice.currency)}
+              value={formatOptionalEuros(invoice.duePayableAmount, invoice.currency)}
               strong
             />
             {invoice.dueDate ? <Row label="Échéance" value={formatDate(invoice.dueDate)} /> : null}
@@ -188,9 +252,9 @@ export default async function InvoiceDetailPage({
       <section className="rounded-lg border border-navy-100 bg-white p-5">
         <h2 className="text-sm font-semibold text-navy-900">Archive</h2>
         <p className="mt-1 text-xs leading-relaxed text-navy-500">
-          Les deux versions sont scellées : le XML est l&apos;original au sens de la réforme, le PDF
-          est la version lisible. Chaque téléchargement revérifie les octets contre l&apos;empreinte
-          enregistrée au scellement.
+          {invoice.direction === 'RECEIVED'
+            ? "Le document est conservé exactement tel qu'il a été reçu, sans retouche. Chaque téléchargement revérifie les octets contre l'empreinte enregistrée au dépôt."
+            : "Les deux versions sont scellées : le XML est l'original au sens de la réforme, le PDF est la version lisible. Chaque téléchargement revérifie les octets contre l'empreinte enregistrée au scellement."}
         </p>
 
         <div className="mt-4 flex flex-wrap gap-3">

@@ -13,7 +13,8 @@ export const dynamic = 'force-dynamic';
 const NAV = [
   { href: '/tableau-de-bord', label: "Vue d'ensemble" },
   { href: '/clients', label: 'Entreprises clientes' },
-  { href: '/factures', label: 'Factures' },
+  { href: '/factures', label: 'Factures émises' },
+  { href: '/reception', label: 'Factures reçues' },
 ];
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {

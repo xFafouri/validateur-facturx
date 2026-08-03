@@ -32,3 +32,21 @@ export interface IssueFormState {
 }
 
 export const NO_ISSUE_ERROR: IssueFormState = { error: null, issues: [] };
+
+/** Reception reports a result in place rather than redirecting; see `receiveInvoice`. */
+export interface ReceiveFormState {
+  readonly error: string | null;
+  readonly result: {
+    readonly invoiceId: string;
+    readonly invoiceNumber: string;
+    readonly clientOrgName: string;
+    readonly supplierName: string | null;
+    readonly conforme: boolean;
+    readonly duplicate: boolean;
+    readonly errorCount: number;
+    readonly ruleIds: readonly string[];
+    readonly filename: string;
+  } | null;
+}
+
+export const NO_RECEIVE_STATE: ReceiveFormState = { error: null, result: null };

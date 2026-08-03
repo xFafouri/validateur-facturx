@@ -209,9 +209,12 @@ suite('issuing an invoice', () => {
 
     expect(invoice.lines[0]!.netAmount.toString()).toBe('43.21');
     expect(invoice.lines[0]!.netUnitPrice.toString()).toBe('12.3456');
-    expect(invoice.lineTotalAmount.toString()).toBe('43.21');
-    expect(invoice.taxTotalAmount.toString()).toBe('8.64');
-    expect(invoice.grandTotalAmount.toString()).toBe('51.85');
+    // Non-null asserted, not defaulted: the totals became nullable so a malformed *received*
+    // invoice can be recorded honestly, and an issued one having them is the property under test.
+    // A CHECK constraint enforces the same thing in the database.
+    expect(invoice.lineTotalAmount!.toString()).toBe('43.21');
+    expect(invoice.taxTotalAmount!.toString()).toBe('8.64');
+    expect(invoice.grandTotalAmount!.toString()).toBe('51.85');
   });
 
   it('takes the seller from the client org, not from the request', async () => {

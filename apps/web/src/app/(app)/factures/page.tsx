@@ -12,14 +12,19 @@ const PAGE_SIZE = 50;
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ clientOrgId?: string; page?: string }>;
+  searchParams: Promise<{ clientOrgId?: string; page?: string; direction?: string }>;
 }) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page ?? '1') || 1);
   const skip = (page - 1) * PAGE_SIZE;
 
+  // Unset means both directions; `/factures` is the whole book, not just what we issued.
+  const direction =
+    params.direction === 'ISSUED' || params.direction === 'RECEIVED' ? params.direction : undefined;
+
   const query = new URLSearchParams({ take: String(PAGE_SIZE), skip: String(skip) });
   if (params.clientOrgId) query.set('clientOrgId', params.clientOrgId);
+  if (direction) query.set('direction', direction);
 
   let result: InvoiceListPage;
   let clientOrgs: ClientOrgSummary[];
@@ -44,8 +49,8 @@ export default async function InvoicesPage({
         <div>
           <h1 className="text-2xl font-semibold text-navy-900">Factures</h1>
           <p className="mt-1 text-sm text-navy-600">
-            {result.total} facture{result.total > 1 ? 's' : ''} émise
-            {result.total > 1 ? 's' : ''} et scellée{result.total > 1 ? 's' : ''}.
+            {result.total} facture{result.total > 1 ? 's' : ''} scellée
+            {result.total > 1 ? 's' : ''} dans votre archive.
           </p>
         </div>
         {clientOrgs.length > 0 ? (
@@ -57,6 +62,24 @@ export default async function InvoicesPage({
           </Link>
         ) : null}
       </div>
+
+      <nav aria-label="Filtrer par sens" className="flex flex-wrap gap-2 text-sm">
+        <FilterLink href={directionHref(params.clientOrgId, undefined)} active={!direction}>
+          Toutes
+        </FilterLink>
+        <FilterLink
+          href={directionHref(params.clientOrgId, 'ISSUED')}
+          active={direction === 'ISSUED'}
+        >
+          Émises
+        </FilterLink>
+        <FilterLink
+          href={directionHref(params.clientOrgId, 'RECEIVED')}
+          active={direction === 'RECEIVED'}
+        >
+          Reçues
+        </FilterLink>
+      </nav>
 
       {clientOrgs.length > 1 ? (
         <nav aria-label="Filtrer par entreprise" className="flex flex-wrap gap-2 text-sm">
@@ -75,7 +98,7 @@ export default async function InvoicesPage({
         </nav>
       ) : null}
 
-      <InvoiceTable invoices={result.invoices} />
+      <InvoiceTable invoices={result.invoices} direction={direction} />
 
       {lastPage > 1 ? (
         <nav aria-label="Pagination" className="flex items-center justify-between text-sm">
@@ -102,6 +125,14 @@ function pageHref(clientOrgId: string | undefined, page: number): string {
   const query = new URLSearchParams({ page: String(page) });
   if (clientOrgId) query.set('clientOrgId', clientOrgId);
   return `/factures?${query}`;
+}
+
+function directionHref(clientOrgId: string | undefined, direction: string | undefined): string {
+  const query = new URLSearchParams();
+  if (clientOrgId) query.set('clientOrgId', clientOrgId);
+  if (direction) query.set('direction', direction);
+  const suffix = query.toString();
+  return suffix === '' ? '/factures' : `/factures?${suffix}`;
 }
 
 function FilterLink({

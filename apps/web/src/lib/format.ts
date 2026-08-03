@@ -23,6 +23,17 @@ const DATE_SHORT = new Intl.DateTimeFormat('fr-FR', {
   timeZone: 'Europe/Paris',
 });
 
+/**
+ * An amount a received invoice may simply not have stated.
+ *
+ * Rendered as a dash rather than as `0,00 €`: an invented figure on an accountant's screen is far
+ * worse than a visible gap, and a supplier who omitted BT-112 did not bill zero.
+ */
+export function formatOptionalEuros(amount: string | null | undefined, currency = 'EUR'): string {
+  if (amount === null || amount === undefined) return 'non indiqué';
+  return formatEuros(amount, currency);
+}
+
 export function formatEuros(amount: string, currency = 'EUR'): string {
   const value = Number(amount);
   if (!Number.isFinite(value)) return `${amount} ${currency}`;

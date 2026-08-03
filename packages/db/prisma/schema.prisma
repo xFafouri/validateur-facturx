@@ -282,33 +282,59 @@ model Invoice {
   /// BT-10.
   buyerReference String?
 
-  /// Factur-X profile actually emitted.
+  /// Factur-X profile emitted, or the profile the received document declared.
   profile String @default("BASIC")
 
   sellerPartyId String
   buyerPartyId  String
 
+  /// The other party's SIREN: the buyer's on an issued invoice, the supplier's on a received one.
+  ///
+  /// Denormalised from the `Party` snapshot purely so it can be indexed. Party rows are written
+  /// fresh per invoice, so they cannot carry a uniqueness constraint that spans invoices - and
+  /// "this supplier already sent us that number" is exactly such a constraint.
+  counterpartyLegalId String?
+
+  /// When the document reached us. Null for invoices we issued.
+  receivedAt DateTime?
+
+  /// How it arrived - `upload`, and later a platform adapter key. Null for issued invoices.
+  sourceChannel String?
+
   // Totals. NUMERIC, never Float - see the header note.
+  //
+  // Nullable, which they were not while only issued invoices existed. A received invoice may be
+  // malformed - that is the whole reason this product exists - and one that omits BT-112 has to
+  // be recorded as omitting it. Storing a placeholder zero would put a false amount in front of
+  // an accountant, which is worse than an obvious gap. The guarantee for invoices *we* issue is
+  // not weakened: a CHECK constraint (see the migration) still requires every total on ISSUED.
   /// BT-106
-  lineTotalAmount     Decimal @db.Decimal(19, 4)
+  lineTotalAmount     Decimal? @db.Decimal(19, 4)
   /// BT-107
-  allowanceTotalAmount Decimal @default(0) @db.Decimal(19, 4)
+  allowanceTotalAmount Decimal? @default(0) @db.Decimal(19, 4)
   /// BT-108
-  chargeTotalAmount   Decimal @default(0) @db.Decimal(19, 4)
+  chargeTotalAmount   Decimal? @default(0) @db.Decimal(19, 4)
   /// BT-109
-  taxBasisTotalAmount Decimal @db.Decimal(19, 4)
+  taxBasisTotalAmount Decimal? @db.Decimal(19, 4)
   /// BT-110
-  taxTotalAmount      Decimal @db.Decimal(19, 4)
+  taxTotalAmount      Decimal? @db.Decimal(19, 4)
   /// BT-112
-  grandTotalAmount    Decimal @db.Decimal(19, 4)
+  grandTotalAmount    Decimal? @db.Decimal(19, 4)
   /// BT-113
-  prepaidAmount       Decimal @default(0) @db.Decimal(19, 4)
+  prepaidAmount       Decimal? @default(0) @db.Decimal(19, 4)
   /// BT-115
-  duePayableAmount    Decimal @db.Decimal(19, 4)
+  duePayableAmount    Decimal? @db.Decimal(19, 4)
 
   /// Last validation verdict, cached for list views.
   lastValidationValid Boolean?
   lastValidatedAt     DateTime?
+
+  /// Error count from the last validation, so a list can rank the worst first without re-running.
+  validationErrorCount Int?
+
+  /// Rule ids that fired, e.g. `["BR-CO-10", "BR-DE-15"]`. Enough to explain a verdict in a list
+  /// without storing the whole engine report; the sealed artifact can always be re-validated.
+  validationRuleIds Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -324,11 +350,20 @@ model Invoice {
   archiveEntries   ArchiveEntry[]
   transmissions    Transmission[]
 
-  /// An issuer may not reuse a number; enforced per client org rather than per tenant, since
-  /// each client business has its own sequence.
-  @@unique([clientOrgId, direction, invoiceNumber])
+  // Uniqueness of the invoice number is deliberately NOT declared here, because it is two
+  // different rules depending on direction, and Prisma's DSL cannot express either:
+  //
+  //   - ISSUED: unique per client org. The CGI requires unbroken, duplicate-free numbering, and
+  //     that is an obligation on the *issuer*.
+  //   - RECEIVED: unique per client org *and supplier*. Two suppliers reusing `FA-2026-001` is
+  //     entirely normal, and the earlier constraint - which spanned direction but not the
+  //     counterparty - would have rejected the second supplier's invoice as a duplicate.
+  //
+  // Both are partial unique indexes, written by hand in the migration.
   @@index([tenantId, state])
+  @@index([tenantId, direction, issueDate])
   @@index([clientOrgId, issueDate])
+  @@index([counterpartyLegalId])
 }
 
 model InvoiceLine {
