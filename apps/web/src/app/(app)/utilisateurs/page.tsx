@@ -121,14 +121,15 @@ export default async function UsersPage() {
       </section>
 
       <section>
-        <h2 className="mb-3 text-lg font-semibold text-navy-900">Créer un accès</h2>
+        <h2 className="mb-3 text-lg font-semibold text-navy-900">Inviter quelqu&apos;un</h2>
         <div className="rounded-lg border border-navy-100 bg-white p-6">
           <NewUserForm clientOrgs={clientOrgs} minPasswordLength={MIN_PASSWORD_LENGTH} />
         </div>
         <p className="mt-3 text-xs leading-relaxed text-navy-500">
-          Désactiver un accès met fin immédiatement à ses sessions en cours. Le compte est conservé
-          plutôt que supprimé : le journal d&apos;audit référence ses actions passées, et un journal
-          dont les acteurs disparaissent n&apos;est plus un journal.
+          La personne invitée choisit elle-même son mot de passe : il n&apos;est jamais connu de
+          vous ni de nous. Désactiver un accès met fin immédiatement à ses sessions en cours. Le
+          compte est conservé plutôt que supprimé : le journal d&apos;audit référence ses actions
+          passées, et un journal dont les acteurs disparaissent n&apos;est plus un journal.
         </p>
       </section>
     </div>

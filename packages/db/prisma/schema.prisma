@@ -121,6 +121,7 @@ model User {
   /// When set, this user may only see these client orgs - used for client-user logins.
   scopedClientOrgs ClientOrgUser[]
   sessions         Session[]
+  credentialTokens CredentialToken[]
 
   @@index([tenantId])
 }
@@ -214,6 +215,47 @@ model ClientOrgUser {
 
   @@id([userId, clientOrgId])
   @@index([clientOrgId])
+}
+
+/// Why a one-time credential link was issued.
+enum CredentialTokenPurpose {
+  /// Sent to someone who asked to reset a forgotten password.
+  PASSWORD_RESET
+  /// Sent to a new user so they can choose their own password and activate their access.
+  INVITATION
+}
+
+/// A single-use link emailed to a user, for setting a password.
+///
+/// The same discipline as `Session`: only SHA-256 of the token is stored, so a leaked backup or a
+/// stray query log yields nothing usable. Plain SHA-256 rather than scrypt for the same reason -
+/// the token is 256 bits of CSPRNG output, so there is no guessable preimage to slow down over.
+///
+/// `usedAt` rather than deleting the row on use. A reset link that has already been used is a
+/// meaningfully different thing from one that never existed: the first is worth telling the user
+/// about ("this link has already been used"), and the second is worth logging. Rows are cleaned up
+/// on expiry, not on use.
+model CredentialToken {
+  id     String @id @default(cuid())
+  userId String
+
+  purpose   CredentialTokenPurpose
+  /// Hex-encoded SHA-256 of the token in the emailed link.
+  tokenHash String                 @unique
+
+  expiresAt DateTime
+  usedAt    DateTime?
+  /// Set when a newer token supersedes this one, so only the most recent link works.
+  invalidatedAt DateTime?
+
+  /// Who triggered it, for an invitation. Null for a self-service reset.
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
 }
 
 // ---------------------------------------------------------------------------

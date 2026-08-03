@@ -26,16 +26,18 @@ export class CreateUserDto {
   role!: (typeof ROLES)[number];
 
   /**
-   * Initial password.
+   * Optional initial password.
    *
-   * Set by the owner and handed over out of band, because there is no mail transport yet. The
-   * alternative - an invitation link - needs email, and shipping a user list that cannot create a
-   * user until then would leave roles unusable.
+   * The normal path is to omit it: the user is created without one and emailed a link to choose
+   * their own, so the password is never known to anyone else and never sits in a chat log or a
+   * sticky note. Supplying one is kept for a deployment with no mail relay, where an owner has no
+   * other way to get someone in.
    */
+  @IsOptional()
   @IsString()
   @MinLength(12, { message: 'Le mot de passe doit contenir au moins 12 caractères.' })
   @MaxLength(512)
-  password!: string;
+  password?: string;
 
   /** Which client businesses a CLIENT_USER may reach. Ignored for the unscoped roles. */
   @IsOptional()

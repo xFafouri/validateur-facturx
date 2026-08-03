@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { Alert, Button, Field, TextInput } from '@/components/ui/Form';
@@ -45,6 +46,12 @@ export function SignInForm({ next }: { next: string }) {
           aria-invalid={state.error ? true : undefined}
         />
       </Field>
+
+      <p className="text-sm">
+        <Link href="/mot-de-passe-oublie" className="text-navy-600 underline hover:text-navy-900">
+          Mot de passe oublié ?
+        </Link>
+      </p>
 
       <SubmitButton />
     </form>

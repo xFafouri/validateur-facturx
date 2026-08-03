@@ -11,7 +11,7 @@ function SubmitButton() {
   const { pending } = useFormStatus();
   return (
     <Button type="submit" disabled={pending}>
-      {pending ? 'Création…' : "Créer l'accès"}
+      {pending ? 'Envoi…' : 'Inviter'}
     </Button>
   );
 }
@@ -37,10 +37,30 @@ export function NewUserForm({
   return (
     <form action={formAction} className="space-y-5">
       {state.error ? <Alert tone="error">{state.error}</Alert> : null}
-      {state.created ? (
+      {state.created && state.invited && state.invitationSent ? (
+        <Alert tone="success" title="Invitation envoyée">
+          <strong>{state.created}</strong> va recevoir un e-mail pour choisir son mot de passe. Le
+          lien est valable sept jours. L&apos;accès n&apos;est actif qu&apos;une fois le lien
+          utilisé.
+        </Alert>
+      ) : null}
+
+      {/*
+        The account exists and its link is valid — only delivery failed. Saying "created but not
+        sent" is the honest report; claiming failure would leave an owner creating duplicates.
+      */}
+      {state.created && state.invited && state.invitationSent === false ? (
+        <Alert tone="warn" title="Accès créé, invitation non envoyée">
+          Le compte de <strong>{state.created}</strong> existe, mais l&apos;e-mail n&apos;a pas pu
+          être envoyé. Vérifiez la configuration SMTP, puis renvoyez l&apos;invitation.
+        </Alert>
+      ) : null}
+
+      {state.created && !state.invited ? (
         <Alert tone="success">
-          L&apos;accès pour <strong>{state.created}</strong> a été créé. Communiquez-lui le mot de
-          passe que vous venez de saisir — il n&apos;est plus consultable ensuite.
+          L&apos;accès pour <strong>{state.created}</strong> a été créé avec le mot de passe que
+          vous venez de saisir. Communiquez-le à la personne concernée — il n&apos;est plus
+          consultable ensuite.
         </Alert>
       ) : null}
 
@@ -98,20 +118,29 @@ export function NewUserForm({
         </fieldset>
       ) : null}
 
-      <Field
-        label="Mot de passe initial"
-        name="password"
-        required
-        hint={`${minPasswordLength} caractères minimum. À communiquer à la personne concernée ; il n'est pas récupérable ensuite.`}
-      >
-        <TextInput
-          name="password"
-          type="password"
-          required
-          minLength={minPasswordLength}
-          autoComplete="new-password"
-        />
-      </Field>
+      {/*
+        Deliberately optional and deliberately last. Left blank - the normal case - the user gets
+        an emailed link and chooses their own password, so it is never known to anyone else.
+      */}
+      <details className="rounded border border-navy-100 bg-navy-50/50 p-4">
+        <summary className="cursor-pointer text-sm font-medium text-navy-900">
+          Définir un mot de passe au lieu d&apos;envoyer une invitation
+        </summary>
+        <div className="mt-4">
+          <Field
+            label="Mot de passe initial"
+            name="password"
+            hint={`${minPasswordLength} caractères minimum. À n'utiliser que si l'envoi d'e-mails n'est pas configuré : vous devrez le communiquer vous-même, et il n'est pas récupérable ensuite.`}
+          >
+            <TextInput
+              name="password"
+              type="password"
+              minLength={minPasswordLength}
+              autoComplete="new-password"
+            />
+          </Field>
+        </div>
+      </details>
 
       <SubmitButton />
     </form>

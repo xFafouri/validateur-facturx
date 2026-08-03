@@ -7,24 +7,28 @@ import type { UserFormState } from '@/lib/form-state';
 /**
  * Creates a login for the tenant.
  *
- * The owner sets the initial password and passes it on out of band. An invitation link would be
- * better and needs a mail transport, which does not exist yet — shipping a user list that cannot
- * actually create a user until then would leave the whole role model unusable.
+ * The user is emailed a link to choose their own password. No password is set here and none is
+ * shown to the owner, so it is never known to anyone but its owner. The fallback — an owner
+ * setting one directly — stays available for a deployment with no mail relay.
  */
 export async function createUser(
   _state: UserFormState,
   formData: FormData,
 ): Promise<UserFormState> {
   const role = String(formData.get('role') ?? 'ACCOUNTANT');
+  const password = String(formData.get('password') ?? '');
 
+  let result: { invited: boolean; invitationSent: boolean };
   try {
-    await api('/users', {
+    result = await api('/users', {
       method: 'POST',
       body: {
         email: String(formData.get('email') ?? '').trim(),
         name: String(formData.get('name') ?? '').trim() || undefined,
         role,
-        password: String(formData.get('password') ?? ''),
+        // Omitted entirely when blank, which is what makes it an invitation rather than a
+        // hand-over. Sending an empty string would fail the minimum-length check instead.
+        ...(password === '' ? {} : { password }),
         // Only meaningful for the scoped role; the API ignores it for the others.
         clientOrgIds: role === 'CLIENT_USER' ? formData.getAll('clientOrgIds').map(String) : [],
       },
@@ -35,7 +39,12 @@ export async function createUser(
   }
 
   revalidatePath('/utilisateurs');
-  return { error: null, created: String(formData.get('email') ?? '') };
+  return {
+    error: null,
+    created: String(formData.get('email') ?? ''),
+    invited: result.invited,
+    invitationSent: result.invitationSent,
+  };
 }
 
 /** Enables or disables a login. Disabling ends the user's sessions immediately. */

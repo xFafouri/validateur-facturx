@@ -68,6 +68,7 @@ invoices must install one (`fonts-dejavu-core`) or point `FACTURX_FONT_REGULAR` 
 | `apps/api`           | NestJS. Validation, invoicing and archiving implemented; PDP and billing are skeletons.                       |
 | `packages/facturx`   | Core: CII parsing/serialising, PDF/A-3 extraction and assembly, validation, French rule catalogue. **Built.** |
 | `packages/auth`      | Password hashing and server-side sessions, shared by the web app and the API. **Built.**                      |
+| `packages/mail`      | Outbound transactional mail: a transport port with SMTP, console and in-memory drivers. **Built.**            |
 | `packages/db`        | Prisma schema for the full data model. **Migrated and in use.**                                               |
 | `services/validator` | Java sidecar wrapping Mustangproject. **Built.**                                                              |
 
@@ -250,8 +251,60 @@ half-finished invitation looks like and "nothing" is the safe reading. Changing 
 assignment revokes their sessions immediately, so a demoted user cannot keep working from a tab
 they left open.
 
-**Not built: invitation emails.** There is no mail transport, so an owner sets an initial password
-and passes it on out of band. Password reset has the same gap.
+New users are **invited by email** and choose their own password, so it is never known to the
+owner, never read out over the phone and never sits in a chat log. Setting one directly is still
+possible for a deployment with no relay.
+
+---
+
+## Mail
+
+Password resets and invitations, behind a transport port with three drivers
+([`packages/mail`](packages/mail)) — the same shape as `ArtifactStore` and `PdpProvider`, and for
+the same reason: production sends through a relay, development must not, and tests must be able to
+read what was sent.
+
+**With no `SMTP_HOST` set, messages print to the console.** That is the default on purpose: a
+developer can complete a password reset by reading the link out of their terminal, with no provider
+account, no domain and no DNS. Production sets `SMTP_HOST`; a deployment that wants a missing relay
+to be fatal rather than silently printing sets `MAIL_TRANSPORT=unavailable`.
+
+Configured for **Brevo** by default — French, EU-hosted. Not a neutral choice: every address here
+belongs to a French accountant or one of their clients, and the relay is the last mile where that
+data could leave the EU, which is the same reasoning that made identity self-hosted. Any
+RFC-compliant relay works.
+
+Sending needs **a domain you control DNS for**, not a business mailbox. The `From` must be at a
+domain carrying your SPF and DKIM records; a Gmail address cannot work, because Gmail's DMARC
+policy tells receivers to reject mail claiming to be `@gmail.com` that Google did not send.
+
+```bash
+# Check a relay without going through the app. Safe to run: with no SMTP_HOST it prints.
+pnpm --filter @facturx/mail send-test vous@exemple.fr
+```
+
+### The links
+
+Reset and invitation links are the same primitive as a session: 256 bits of CSPRNG output, stored
+only as SHA-256, checked against the database on use. Three properties are specific to them:
+
+- **Issuing a new link invalidates the old one**, so clicking "forgot password" three times does
+  not leave three live links in three emails.
+- **Consuming is atomic** — `updateMany` with `usedAt: null` in the predicate — so two simultaneous
+  submissions cannot both set a password.
+- **A weak password does not burn the link**, or a typo would send the user back to their mailbox.
+
+Requesting a reset **reports success unconditionally**, whether the address exists, is disabled or
+was never seen. Anything else turns the form into a way of asking which businesses use a given
+cabinet. Completing one is the opposite: the caller already holds a secret from their own mailbox,
+so failures are named — an expired link says it expired.
+
+A successful reset revokes **every** session for that user, because a reset is what someone does
+when they think they are compromised, and leaving the attacker's session alive defeats the point.
+
+Emails load no remote resource — no images, no web fonts, no tracking pixel — so opening one
+discloses nothing to us. The password-changed notice deliberately carries **no link at all**: a
+"was this you?" message with a button is the shape of a phishing mail.
 
 ---
 
@@ -370,9 +423,8 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 ### Still open
 
 Which certified platform to integrate first; hosting region and topology (**must be EU** — French
-tax data) and with it the production object store; Stripe price points. **No mail transport**,
-which is what blocks both password reset and invitation emails — an owner currently sets a new
-user's initial password and passes it on out of band, and a locked-out user needs an operator.
+tax data) and with it the production object store; Stripe price points. Mail needs a domain with
+SPF and DKIM records before it can send anywhere real.
 
 ---
 

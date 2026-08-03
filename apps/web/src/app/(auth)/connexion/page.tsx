@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import type { Metadata } from 'next';
+import { Alert } from '@/components/ui/Form';
 import { currentUser } from '@/lib/session';
 import { SignInForm } from './SignInForm';
 
@@ -10,9 +11,9 @@ export const dynamic = 'force-dynamic';
 export default async function SignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; motdepasse?: string; acces?: string }>;
 }) {
-  const { next } = await searchParams;
+  const { next, motdepasse, acces } = await searchParams;
 
   // Already signed in: send them on rather than showing a form that would open a second session.
   if (await currentUser()) redirect(safeNext(next));
@@ -23,6 +24,23 @@ export default async function SignInPage({
       <p className="mt-1.5 text-sm text-navy-600">
         Accédez à vos entreprises clientes et à vos factures émises.
       </p>
+
+      {/* Set by the redirect out of the set-password flow, which cannot confirm in place. */}
+      {motdepasse === 'modifie' ? (
+        <div className="mt-5">
+          <Alert tone="success" title="Mot de passe modifié">
+            Toutes vos sessions ont été fermées. Connectez-vous avec votre nouveau mot de passe.
+          </Alert>
+        </div>
+      ) : null}
+
+      {acces === 'active' ? (
+        <div className="mt-5">
+          <Alert tone="success" title="Accès activé">
+            Votre mot de passe est enregistré. Vous pouvez maintenant vous connecter.
+          </Alert>
+        </div>
+      ) : null}
 
       <div className="mt-6">
         <SignInForm next={safeNext(next)} />

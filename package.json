@@ -19,7 +19,7 @@
     "stack:up": "docker compose up -d",
     "stack:down": "docker compose down",
     "dev:validator": "docker compose up -d validator",
-    "verify": "pnpm --filter @facturx/db generate && pnpm --filter @facturx/core build && pnpm --filter @facturx/auth build && pnpm lint && pnpm -r typecheck && pnpm -r test"
+    "verify": "pnpm --filter @facturx/db generate && pnpm --filter @facturx/core build && pnpm --filter @facturx/auth build && pnpm --filter @facturx/mail build && pnpm lint && pnpm -r typecheck && pnpm -r test"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

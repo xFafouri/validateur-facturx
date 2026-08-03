@@ -12,6 +12,7 @@
   "dependencies": {
     "@facturx/auth": "workspace:*",
     "@facturx/core": "workspace:*",
+    "@facturx/mail": "workspace:*",
     "@prisma/client": "^6.2.1",
     "next": "^15.1.6",
     "react": "^19.0.0",

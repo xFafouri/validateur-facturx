@@ -292,13 +292,37 @@ suite('user management', () => {
     await prisma.tenant.deleteMany({ where: { id: other.tenantId } });
   });
 
-  it('refuses a password below the minimum', async () => {
+  it('refuses a password below the minimum when one is supplied', async () => {
     const response = await post('/users', ownerCookie, {
       email: `faible.${run}@roles-test.fr`,
       role: 'ACCOUNTANT',
       password: 'court',
     });
     expect(response.status).toBe(400);
+  });
+
+  /**
+   * The normal path: no password, an invitation instead. The account exists but cannot be signed
+   * into until the emailed link is used, which is what makes the password never known to anyone
+   * but its owner.
+   */
+  it('creates an inactive account and issues an invitation when no password is given', async () => {
+    const email = `invite.${run}@roles-test.fr`;
+    const response = await post('/users', ownerCookie, { email, role: 'ACCOUNTANT' });
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ invited: true });
+
+    const created = await prisma.user.findUniqueOrThrow({
+      where: { email },
+      select: { id: true, passwordHash: true },
+    });
+    expect(created.passwordHash).toBeNull();
+
+    const invitation = await prisma.credentialToken.findFirst({
+      where: { userId: created.id, purpose: 'INVITATION', usedAt: null },
+    });
+    expect(invitation).not.toBeNull();
   });
 
   /**

@@ -39,6 +39,30 @@ export {
 export type { AuthenticatedUser, IssuedSession, SessionDb, SessionOrigin } from './session.js';
 
 export {
+  checkCredentialToken,
+  consumeCredentialToken,
+  hashCredentialToken,
+  issueCredentialToken,
+  purgeExpiredCredentialTokens,
+  ttlFor,
+  INVITATION_TTL_MS,
+  PASSWORD_RESET_TTL_MS,
+} from './credential-tokens.js';
+export type {
+  CredentialTokenCheck,
+  CredentialTokenFailure,
+  CredentialTokenHolder,
+  IssuedCredentialToken,
+} from './credential-tokens.js';
+
+export {
+  requestPasswordReset,
+  setPasswordWithToken,
+  CREDENTIAL_FAILURE_MESSAGES,
+} from './password-reset.js';
+export type { ResetRequest, SetPasswordOutcome } from './password-reset.js';
+
+export {
   can,
   isClientOrgAllowed,
   isScopedRole,

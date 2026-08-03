@@ -55,6 +55,27 @@ export const NO_RECEIVE_STATE: ReceiveFormState = { error: null, result: null };
 export interface UserFormState {
   readonly error: string | null;
   readonly created: string | null;
+  /** True when no password was set and an invitation link was issued instead. */
+  readonly invited?: boolean;
+  /** False when the invitation was issued but could not be delivered. */
+  readonly invitationSent?: boolean;
 }
 
 export const NO_USER_STATE: UserFormState = { error: null, created: null };
+
+/** Password-reset request: always reports the same thing, whether or not the address exists. */
+export interface ResetRequestState {
+  readonly error: string | null;
+  readonly submitted: boolean;
+}
+
+export const NO_RESET_REQUEST: ResetRequestState = { error: null, submitted: false };
+
+/** Setting a password from an emailed link. */
+export interface SetPasswordState {
+  readonly error: string | null;
+  /** True once the password is set, so the page can offer sign-in instead of the form. */
+  readonly done: boolean;
+}
+
+export const NO_SET_PASSWORD: SetPasswordState = { error: null, done: false };

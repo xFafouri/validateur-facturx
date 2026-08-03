@@ -14,6 +14,7 @@
   "dependencies": {
     "@facturx/auth": "workspace:*",
     "@facturx/core": "workspace:*",
+    "@facturx/mail": "workspace:*",
     "@facturx/db": "workspace:*",
     "@nestjs/common": "^11.0.5",
     "@nestjs/config": "^4.0.0",

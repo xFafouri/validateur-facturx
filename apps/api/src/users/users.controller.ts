@@ -31,14 +31,19 @@ import {
 import {
   hashPassword,
   isScopedRole,
+  issueCredentialToken,
   normaliseEmail,
   passwordProblem,
   revokeAllSessions,
+  INVITATION_TTL_MS,
   type AuthenticatedUser,
 } from '@facturx/auth';
+import { invitationMessage, type MailConfig } from '@facturx/mail';
 import type { UserRole } from '@prisma/client';
+import { Inject, Logger } from '@nestjs/common';
 import { PermissionGuard, RequirePermission } from '../auth/permission.guard';
 import { CurrentUser, SessionGuard } from '../auth/session.guard';
+import { MAIL_CONFIG } from '../mail/mail.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 
@@ -46,7 +51,12 @@ import { CreateUserDto, UpdateUserDto } from './dto/user.dto';
 @UseGuards(SessionGuard, PermissionGuard)
 @RequirePermission('user:manage')
 export class UsersController {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(UsersController.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(MAIL_CONFIG) private readonly mail: MailConfig,
+  ) {}
 
   @Get()
   async list(@CurrentUser() actor: AuthenticatedUser) {
@@ -79,8 +89,15 @@ export class UsersController {
   async create(@CurrentUser() actor: AuthenticatedUser, @Body() body: CreateUserDto) {
     const email = normaliseEmail(body.email);
 
-    const problem = passwordProblem(body.password);
-    if (problem) throw new BadRequestException(problem);
+    // A password is optional, and omitting it is the normal path: the account is created without
+    // one and the user is emailed a link to choose their own, so nobody else ever knows it and it
+    // never sits in a chat log or on a sticky note. Supplying one is kept for a deployment with no
+    // mail relay, where an owner would otherwise have no way to get anyone in.
+    const initialPassword = body.password;
+    if (initialPassword !== undefined) {
+      const problem = passwordProblem(initialPassword);
+      if (problem) throw new BadRequestException(problem);
+    }
 
     const clientOrgIds = await this.validateClientOrgs(
       actor.tenantId,
@@ -90,7 +107,7 @@ export class UsersController {
 
     // Hashed before the transaction opens: scrypt takes ~100 ms by design, and holding a database
     // transaction across it holds a connection for the duration of a deliberate slowdown.
-    const passwordHash = await hashPassword(body.password);
+    const passwordHash = initialPassword === undefined ? null : await hashPassword(initialPassword);
 
     try {
       const created = await this.prisma.$transaction(async (tx) => {
@@ -105,8 +122,19 @@ export class UsersController {
               ? { scopedClientOrgs: { create: clientOrgIds.map((id) => ({ clientOrgId: id })) } }
               : {}),
           },
-          select: { id: true, email: true, role: true },
+          select: { id: true, email: true, name: true, role: true },
         });
+
+        // Issued inside the transaction so the invitation and the account it belongs to commit
+        // together: an account nobody can activate is worse than no account.
+        const invitation =
+          passwordHash === null
+            ? await issueCredentialToken(tx, {
+                userId: user.id,
+                purpose: 'INVITATION',
+                createdByUserId: actor.userId,
+              })
+            : null;
 
         await tx.auditLog.create({
           data: {
@@ -115,14 +143,49 @@ export class UsersController {
             action: 'user.created',
             entityType: 'User',
             entityId: user.id,
-            metadata: { email, role: body.role, clientOrgIds },
+            metadata: { email, role: body.role, clientOrgIds, invited: invitation !== null },
           },
         });
 
-        return user;
+        return { user, invitation };
       });
 
-      return created;
+      // Sent only after the transaction commits. Sending inside it would let a rolled-back
+      // transaction still put a live-looking link in someone's inbox.
+      let invitationSent = false;
+      if (created.invitation) {
+        const tenant = await this.prisma.tenant.findUnique({
+          where: { id: actor.tenantId },
+          select: { name: true },
+        });
+
+        try {
+          await this.mail.transport.send(
+            invitationMessage({
+              to: created.user.email,
+              recipientName: created.user.name,
+              tenantName: tenant?.name ?? null,
+              invitedByName: actor.name,
+              url: `${this.mail.baseUrl}/reinitialiser-mot-de-passe?invitation=1&token=${encodeURIComponent(created.invitation.token)}`,
+              expiresInHours: Math.round(INVITATION_TTL_MS / 3_600_000),
+            }),
+          );
+          invitationSent = true;
+        } catch (error) {
+          // The account exists and its link is valid; only delivery failed. Reported to the caller
+          // rather than thrown, so the owner learns they need to resend instead of being told the
+          // whole thing failed when it did not.
+          this.logger.error(`Invitation à ${created.user.email} non envoyée : ${String(error)}`);
+        }
+      }
+
+      return {
+        id: created.user.id,
+        email: created.user.email,
+        role: created.user.role,
+        invited: created.invitation !== null,
+        invitationSent,
+      };
     } catch (error) {
       if ((error as { code?: string }).code === 'P2002') {
         // The address is unique across the whole platform, not per tenant, because it is the
