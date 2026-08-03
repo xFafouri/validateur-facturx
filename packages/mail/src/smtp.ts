@@ -8,6 +8,13 @@
  * that made identity self-hosted rather than delegated. Any RFC-compliant relay works; the
  * defaults just save configuring the common case.
  *
+ * ## Timeouts
+ *
+ * Short and explicit, because nodemailer's defaults are two minutes and a password-reset request
+ * sits in front of a person waiting for a page. A relay that is down, or a network that blocks
+ * outbound SMTP - which many do - must fail in seconds with something the logs can explain, not
+ * hang the request until the browser gives up first.
+ *
  * ## Port 587, not 465
  *
  * 587 with STARTTLS is what Brevo documents and what most networks allow outbound. `secure` is
@@ -28,16 +35,25 @@ export interface SmtpOptions {
   readonly from: string;
   /** True only for implicit TLS on 465. Leave false for 587. */
   readonly secure?: boolean;
+  /** Overrides the default timeouts. Milliseconds. */
+  readonly timeoutMs?: number;
 }
+
+/** Long enough for a slow relay, short enough that a person is not left waiting on a dead one. */
+const DEFAULT_TIMEOUT_MS = 10_000;
 
 export class SmtpMailTransport implements MailTransport {
   readonly key = 'smtp';
 
   private readonly transporter: Transporter;
   private readonly from: string;
+  private readonly host: string;
+  private readonly port: number;
 
   constructor(options: SmtpOptions) {
     this.from = options.from;
+    this.host = options.host;
+    this.port = options.port;
     this.transporter = createTransport({
       host: options.host,
       port: options.port,
@@ -46,10 +62,27 @@ export class SmtpMailTransport implements MailTransport {
       // nodemailer would happily send the credentials unencrypted.
       requireTLS: options.secure ? false : true,
       auth: { user: options.user, pass: options.password },
+      connectionTimeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      greetingTimeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      socketTimeout: (options.timeoutMs ?? DEFAULT_TIMEOUT_MS) * 2,
     });
   }
 
   async send(message: MailMessage): Promise<void> {
+    try {
+      await this.sendMail(message);
+    } catch (cause) {
+      // Rewritten with the host in it. nodemailer's own message for a blocked port is a bare
+      // "Connection timeout", which tells whoever reads the log nothing about what to check.
+      const detail = cause instanceof Error ? cause.message : String(cause);
+      throw new Error(
+        `Envoi impossible via ${this.host}:${this.port} — ${detail}. Vérifiez que le relais est joignable (le port SMTP sortant est souvent bloqué) et que les identifiants sont corrects.`,
+        { cause },
+      );
+    }
+  }
+
+  private async sendMail(message: MailMessage): Promise<void> {
     await this.transporter.sendMail({
       from: message.from ?? this.from,
       to: message.to,

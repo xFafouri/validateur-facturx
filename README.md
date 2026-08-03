@@ -283,6 +283,16 @@ policy tells receivers to reject mail claiming to be `@gmail.com` that Google di
 pnpm --filter @facturx/mail send-test vous@exemple.fr
 ```
 
+**Outbound SMTP is blocked on many networks**, including most CI runners and sandboxes — ports 587
+and 465 in particular. That is why the transport sets short, explicit timeouts rather than
+nodemailer's two-minute defaults: a password-reset request sits in front of a person waiting for a
+page, and a blocked port must fail in seconds with a message naming the host, not hang. A failed
+send never changes what the user is told, so it cannot become an enumeration signal either.
+
+Providers also require the sender to be **validated** before they will relay for it. With Brevo
+that is either a verified single address or an authenticated domain; until one exists, a send is
+accepted by the API and rejected at the relay.
+
 ### The links
 
 Reset and invitation links are the same primitive as a session: 256 bits of CSPRNG output, stored

@@ -1,3 +1,50 @@
+import { readFileSync } from 'node:fs';
+
+/**
+ * Loads the workspace-root `.env`.
+ *
+ * Next only reads `.env` files beside the app it is running, and this is a monorepo where the
+ * database URL, the API URL and the mail relay are shared with the API - keeping two copies in
+ * step by hand is exactly the sort of thing that silently stops being done. Parsed here rather
+ * than with a library because there is no dotenv in this app's dependency tree and the format is
+ * ours: `KEY=value`, `#` comments, optional single or double quotes.
+ *
+ * Anything already in the environment wins, so `SMTP_HOST=... next dev` still overrides the file.
+ */
+function loadWorkspaceEnv() {
+  const path = new URL('../../.env', import.meta.url);
+
+  let contents;
+  try {
+    contents = readFileSync(path, 'utf8');
+  } catch {
+    // No root .env is normal - in a container every value arrives through the environment.
+    return;
+  }
+
+  for (const line of contents.split('\n')) {
+    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+
+    const [, key, rawValue] = match;
+    if (process.env[key] !== undefined) continue;
+
+    let value = rawValue.trim();
+    if (
+      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
+    ) {
+      value = value.slice(1, -1);
+    } else {
+      // Unquoted values run to an unescaped `#`.
+      value = value.split(' #')[0].trim();
+    }
+    process.env[key] = value;
+  }
+}
+
+loadWorkspaceEnv();
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,

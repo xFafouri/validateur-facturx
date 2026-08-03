@@ -20,7 +20,14 @@ import { BillingModule } from './billing/billing.module';
  */
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, cache: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      cache: true,
+      // Resolved against the working directory, first match wins. The workspace root is where the
+      // shared settings live - database, validator, archive, mail - and the API is normally run
+      // from its own directory, so both are listed rather than assuming one.
+      envFilePath: ['.env', '../../.env'],
+    }),
     PrismaModule,
     AuthModule,
     MailModule,

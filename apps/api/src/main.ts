@@ -30,7 +30,11 @@ async function bootstrap(): Promise<void> {
 
   app.enableShutdownHooks();
 
-  const port = Number(process.env.PORT ?? 3001);
+  // `API_PORT` first, because in this monorepo both apps read the same root `.env` and a bare
+  // `PORT` there belongs to the web app - without this the API silently binds the web app's port
+  // and one of them loses. `PORT` is still honoured for a container, where each app has its own
+  // environment and `PORT` is the convention.
+  const port = Number(process.env.API_PORT ?? process.env.PORT ?? 3001);
   await app.listen(port);
   new Logger('bootstrap').log(`API listening on :${port}`);
 }

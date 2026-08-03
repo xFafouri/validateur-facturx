@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "pnpm --filter @facturx/core build && pnpm -r --filter '!@facturx/core' build",
+    "dev": "bash scripts/dev.sh",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "lint": "prettier --check .",
