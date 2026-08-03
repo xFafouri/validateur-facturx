@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MustangEngine } from '@facturx/core';
 import { ArchivingModule } from '../archiving/archiving.module';
+import { ClientOrgsController } from './client-orgs.controller';
+import { InvoicesController } from './invoices.controller';
 import { ISSUANCE_ENGINE, IssuanceService } from './issuance.service';
 
 /**
@@ -10,12 +12,13 @@ import { ISSUANCE_ENGINE, IssuanceService } from './issuance.service';
  * Generation reuses the totals logic in `@facturx/core` rather than recomputing amounts, so that
  * what we emit is checked by the same arithmetic that validates what we receive.
  *
- * No controller yet, deliberately. Issuing an invoice is an authenticated, tenant-scoped action,
- * and there is no authentication layer to scope it by - exposing an unauthenticated route that
- * writes to a tenant's archive would be the wrong seam to leave open.
+ * The controllers were held back until there was an authentication layer to scope them by, since
+ * issuing writes into a tenant's ten-year legal archive. They are now behind `SessionGuard`,
+ * which resolves the acting tenant from a session row rather than from anything in the request.
  */
 @Module({
   imports: [ArchivingModule],
+  controllers: [InvoicesController, ClientOrgsController],
   providers: [
     IssuanceService,
     {

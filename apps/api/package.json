@@ -12,23 +12,27 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@facturx/auth": "workspace:*",
     "@facturx/core": "workspace:*",
+    "@facturx/db": "workspace:*",
     "@nestjs/common": "^11.0.5",
     "@nestjs/config": "^4.0.0",
     "@nestjs/core": "^11.0.5",
     "@nestjs/platform-express": "^11.0.5",
+    "@prisma/client": "^6.2.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
-    "@facturx/db": "workspace:*",
-    "@prisma/client": "^6.2.1"
+    "rxjs": "^7.8.1"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.2",
+    "@nestjs/testing": "^11.1.28",
+    "@swc/core": "^1.15.47",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.5",
     "typescript": "^5.7.3",
+    "unplugin-swc": "^1.5.9",
     "vitest": "^2.1.8"
   }
 }
