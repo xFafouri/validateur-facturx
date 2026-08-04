@@ -59,10 +59,15 @@ export class ArchivingService {
   /**
    * Seals an artifact.
    *
-   * Idempotent on `(tenantId, contentHash)`: re-sealing identical bytes returns the existing entry
-   * rather than creating a second one. That is what makes a retried issuance safe, and it is
-   * enforced by a unique constraint rather than by a prior read, so two concurrent attempts cannot
-   * both pass a check and then both insert.
+   * Idempotent on `(tenantId, invoiceId, contentHash)`: re-sealing identical bytes for the same
+   * invoice returns the existing entry rather than creating a second one. That is what makes a
+   * retried issuance safe, and it is enforced by a unique constraint rather than by a prior read,
+   * so two concurrent attempts cannot both pass a check and then both insert.
+   *
+   * **Scoped to the invoice, not to the tenant.** The same bytes belonging to two invoices is not
+   * a duplicate but an intercompany trade - see the note on the model. Deduplicating per tenant
+   * left the second invoice with no entry at all. The bytes themselves are still stored once: the
+   * store is content-addressed, so `put` returns the same key without rewriting them.
    *
    * `tx` lets the caller seal inside a wider transaction, so an invoice and its archive entries
    * commit together.
@@ -82,11 +87,26 @@ export class ArchivingService {
       retentionUntil: retentionUntil(request.issuedAt),
     };
 
+    // An unattached artifact cannot use the compound key, because Postgres treats every NULL
+    // `invoiceId` as distinct and `upsert` would insert a fresh row every time. The partial index
+    // in the migration is what keeps those unique, so this path reads first and lets the index
+    // refuse a genuine race.
+    if (request.invoiceId === null) {
+      const existing = await client.archiveEntry.findFirst({
+        where: { tenantId: request.tenantId, invoiceId: null, contentHash: stored.contentHash },
+      });
+      return existing ?? client.archiveEntry.create({ data });
+    }
+
     // `upsert` with an empty update: the row is never modified, only created if absent. An archive
     // entry that could be updated would not be an archive entry.
     return client.archiveEntry.upsert({
       where: {
-        tenantId_contentHash: { tenantId: request.tenantId, contentHash: stored.contentHash },
+        tenantId_invoiceId_contentHash: {
+          tenantId: request.tenantId,
+          invoiceId: request.invoiceId,
+          contentHash: stored.contentHash,
+        },
       },
       create: data,
       update: {},

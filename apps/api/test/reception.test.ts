@@ -28,6 +28,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ArchivingService } from '../src/archiving/archiving.service';
 import { FilesystemArtifactStore } from '../src/archiving/stores/filesystem.store';
+import { IssuanceService, type IssueDraft } from '../src/invoicing/issuance.service';
 import {
   ReceptionService,
   UnreadableDocumentError,
@@ -61,9 +62,12 @@ const CLIENT = {
 };
 
 let archiveRoot: string;
+let archiving: ArchivingService;
 let reception: ReceptionService;
+let issuance: IssuanceService;
 let tenantId: string;
 let clientOrgId: string;
+let supplierOrgId: string;
 
 const RECEIVED_AT = new Date('2026-09-15T09:00:00.000Z');
 
@@ -141,33 +145,47 @@ beforeAll(async () => {
   if (!ready) return;
 
   archiveRoot = await mkdtemp(join(tmpdir(), 'facturx-reception-'));
-  reception = new ReceptionService(
+  const engine = new MustangEngine({ baseUrl: VALIDATOR_URL });
+  archiving = new ArchivingService(
     prisma as unknown as PrismaService,
-    new ArchivingService(
-      prisma as unknown as PrismaService,
-      new FilesystemArtifactStore(archiveRoot),
-    ),
-    new MustangEngine({ baseUrl: VALIDATOR_URL }),
+    new FilesystemArtifactStore(archiveRoot),
   );
+  reception = new ReceptionService(prisma as unknown as PrismaService, archiving, engine);
+  issuance = new IssuanceService(prisma as unknown as PrismaService, archiving, engine);
 
   const tenant = await prisma.tenant.create({
     data: {
       name: 'Cabinet Réception',
       clientOrgs: {
-        create: {
-          ...CLIENT,
-          addressLine1: '14 rue Diderot',
-          postcode: '69001',
-          city: 'Lyon',
-          countryCode: 'FR',
-        },
+        create: [
+          {
+            ...CLIENT,
+            addressLine1: '14 rue Diderot',
+            postcode: '69001',
+            city: 'Lyon',
+            countryCode: 'FR',
+          },
+          // The supplier on every fixture below, also managed by this cabinet. That is the
+          // ordinary accountant case, and it is what makes one PDF two invoices.
+          {
+            name: 'Fournitures Rhône SAS',
+            siren: '443061841',
+            siret: '44306184100005',
+            vatNumber: 'FR64443061841',
+            addressLine1: '5 quai Perrache',
+            postcode: '69002',
+            city: 'Lyon',
+            countryCode: 'FR',
+          },
+        ],
       },
     },
     include: { clientOrgs: true },
   });
 
   tenantId = tenant.id;
-  clientOrgId = tenant.clientOrgs[0]!.id;
+  clientOrgId = tenant.clientOrgs.find((org) => org.siren === CLIENT.siren)!.id;
+  supplierOrgId = tenant.clientOrgs.find((org) => org.siren === '443061841')!.id;
 });
 
 afterAll(async () => {
@@ -422,6 +440,151 @@ suite('duplicates and numbering', () => {
         now: RECEIVED_AT,
       }),
     ).rejects.toThrow();
+  });
+});
+
+/**
+ * One cabinet, both sides of the trade.
+ *
+ * `Fournitures Rhône` invoices `Plomberie Diderot`, and this tenant manages both. The identical
+ * PDF is therefore two invoices - a receivable for one business and a payable for the other - and
+ * both are entitled to their own sealed artifact and their own ten-year retention.
+ *
+ * This is the case the archive's old `(tenantId, contentHash)` uniqueness got wrong. `seal` found
+ * the issuer's entry and returned it, so the received invoice was written with no artifact at all:
+ * its download 404ed, and receiving it a second time hit the invoice-number index as a 500 instead
+ * of being recognised as a redelivery.
+ */
+suite('intercompany: the same document on both sides', () => {
+  it('files a payable for the buyer, with its own archive entry', async () => {
+    const issued = await issuance.issue({
+      tenantId,
+      clientOrgId: supplierOrgId,
+      draft: {
+        invoiceNumber: 'INTERCO-2026-001',
+        typeCode: '380',
+        issueDate: '2026-09-10',
+        dueDate: '2026-10-10',
+        currency: 'EUR',
+        paymentMeansCode: '30',
+        iban: 'FR7630006000011234567890189',
+        buyer: {
+          name: CLIENT.name,
+          siret: CLIENT.siret,
+          vatId: CLIENT.vatNumber,
+          address: {
+            line1: '14 rue Diderot',
+            postcode: '69001',
+            city: 'Lyon',
+            countryCode: 'FR',
+          },
+        },
+        lines: [
+          {
+            name: 'Robinetterie sanitaire',
+            quantity: '4',
+            unitCode: 'C62',
+            unitPrice: '62.50',
+            vatCategory: 'S',
+            vatRatePercent: '20.00',
+          },
+        ],
+      } as IssueDraft,
+    });
+
+    // Exactly the bytes we sealed as the issuer - which is what the platform would deliver back.
+    const issuedEntry = await prisma.archiveEntry.findFirstOrThrow({
+      where: { invoiceId: issued.invoiceId, artifactKind: 'facturx-pdf' },
+    });
+    const { bytes } = await archiving.retrieve(tenantId, issuedEntry.id);
+
+    const received = await reception.receive({
+      tenantId,
+      bytes,
+      filename: 'interco.pdf',
+      now: RECEIVED_AT,
+    });
+
+    // Filed for the *buyer*, not treated as a duplicate of the issuer's own invoice.
+    expect(received.duplicate).toBe(false);
+    expect(received.clientOrgId).toBe(clientOrgId);
+    expect(received.invoiceId).not.toBe(issued.invoiceId);
+
+    // Two entries, same bytes, one per invoice - each with its own retention deadline.
+    const entries = await prisma.archiveEntry.findMany({
+      where: { tenantId, contentHash: issuedEntry.contentHash },
+    });
+    expect(entries).toHaveLength(2);
+    expect(new Set(entries.map((entry) => entry.invoiceId))).toEqual(
+      new Set([issued.invoiceId, received.invoiceId]),
+    );
+    // The blob itself is stored once: the store is content-addressed.
+    expect(new Set(entries.map((entry) => entry.storageKey)).size).toBe(1);
+
+    // And the payable's artifact is genuinely retrievable, verified against its hash.
+    const receivedEntry = entries.find((entry) => entry.invoiceId === received.invoiceId)!;
+    const readBack = await archiving.retrieve(tenantId, receivedEntry.id);
+    expect(Buffer.from(readBack.bytes).equals(Buffer.from(bytes))).toBe(true);
+  });
+
+  /** Redelivery of an intercompany invoice is still just a redelivery. */
+  it('still deduplicates when the buyer receives it twice', async () => {
+    const issued = await issuance.issue({
+      tenantId,
+      clientOrgId: supplierOrgId,
+      draft: {
+        invoiceNumber: 'INTERCO-2026-002',
+        typeCode: '380',
+        issueDate: '2026-09-11',
+        dueDate: '2026-10-11',
+        currency: 'EUR',
+        paymentMeansCode: '30',
+        iban: 'FR7630006000011234567890189',
+        buyer: {
+          name: CLIENT.name,
+          siret: CLIENT.siret,
+          vatId: CLIENT.vatNumber,
+          address: {
+            line1: '14 rue Diderot',
+            postcode: '69001',
+            city: 'Lyon',
+            countryCode: 'FR',
+          },
+        },
+        lines: [
+          {
+            name: 'Robinetterie sanitaire',
+            quantity: '1',
+            unitCode: 'C62',
+            unitPrice: '50.00',
+            vatCategory: 'S',
+            vatRatePercent: '20.00',
+          },
+        ],
+      } as IssueDraft,
+    });
+
+    const entry = await prisma.archiveEntry.findFirstOrThrow({
+      where: { invoiceId: issued.invoiceId, artifactKind: 'facturx-pdf' },
+    });
+    const { bytes } = await archiving.retrieve(tenantId, entry.id);
+
+    const first = await reception.receive({
+      tenantId,
+      bytes,
+      filename: 'interco.pdf',
+      now: RECEIVED_AT,
+    });
+    const second = await reception.receive({
+      tenantId,
+      bytes,
+      filename: 'interco-encore.pdf',
+      now: RECEIVED_AT,
+    });
+
+    expect(first.duplicate).toBe(false);
+    expect(second.duplicate).toBe(true);
+    expect(second.invoiceId).toBe(first.invoiceId);
   });
 });
 

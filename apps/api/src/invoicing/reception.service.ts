@@ -168,8 +168,13 @@ export class ReceptionService {
 
     // Content hash before anything is written: re-receiving the same bytes is normal (a retry, a
     // forwarded email, a platform redelivering) and must not produce a second invoice.
+    //
+    // Scoped to the client org it routed to, not just the tenant. A cabinet that manages both
+    // sides of a trade holds the identical PDF twice - as company A's issued invoice and as
+    // company B's received one - and the second is a genuine payable, not a redelivery of the
+    // first.
     const contentHash = createHash('sha256').update(request.bytes).digest('hex');
-    const existing = await this.findAlreadyReceived(request.tenantId, contentHash);
+    const existing = await this.findAlreadyReceived(request.tenantId, clientOrg.id, contentHash);
     if (existing) {
       return { ...existing, duplicate: true };
     }
@@ -207,13 +212,25 @@ export class ReceptionService {
     return match;
   }
 
-  /** An invoice already sealed under this hash for this tenant. */
+  /**
+   * An invoice already received under this hash, for this business.
+   *
+   * Expressed as a query over received invoices rather than as a lookup on the archive's unique
+   * key. It used to be the latter, which quietly answered a different question - "are these bytes
+   * archived at all" - and so treated a business's own issued invoice as a reason not to file the
+   * copy its counterparty sent.
+   */
   private async findAlreadyReceived(
     tenantId: string,
+    clientOrgId: string,
     contentHash: string,
   ): Promise<Omit<ReceiveResult, 'duplicate'> | null> {
-    const entry = await this.prisma.archiveEntry.findUnique({
-      where: { tenantId_contentHash: { tenantId, contentHash } },
+    const entry = await this.prisma.archiveEntry.findFirst({
+      where: {
+        tenantId,
+        contentHash,
+        invoice: { direction: 'RECEIVED', clientOrgId },
+      },
       select: {
         invoice: {
           select: {

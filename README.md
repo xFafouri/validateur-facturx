@@ -355,7 +355,18 @@ businesses share a name far more often than they share a SIREN, and an invoice f
 client's books is very hard to notice later.
 
 Receiving the same bytes twice is normal (a retry, a forwarded email, a platform redelivering) and
-is idempotent on the content hash.
+is idempotent on the content hash — **per receiving business**, not per tenant. The distinction
+matters because a cabinet often manages both sides of a trade: company A invoices company B, both
+are its clients, and the identical PDF is A's issued invoice and B's payable. Deduplicating across
+the whole tenant treated the second as a redelivery of the first.
+
+That assumption reached into the archive too, and was wrong there in a worse way. `ArchiveEntry`
+was unique on `(tenantId, contentHash)`, so sealing the intercompany invoice for B found A's entry
+and returned it: **B's invoice was written with no artifact at all**, its download 404ed, and
+receiving it again failed on the invoice-number index instead of deduplicating. An entry is a
+record about _one invoice_ — it carries that invoice's retention deadline — so it is now unique per
+invoice. The bytes are still stored once; the store is content-addressed, and it is the record, not
+the blob, that was being over-deduplicated.
 
 ### What reception changed in the schema
 
@@ -498,7 +509,7 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**360 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
+**362 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
 mocked client would happily accept a `number` where the schema wants `NUMERIC` and prove nothing
 about the cent that matters — and because the transmission queue's guarantees are the database's:
 that a double enqueue is refused by a unique constraint, that `FOR UPDATE SKIP LOCKED` gives two

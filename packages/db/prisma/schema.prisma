@@ -618,6 +618,21 @@ model Transmission {
 /// Content-addressed by SHA-256 so integrity is provable, and never updated - a new version is a
 /// new row. `retentionUntil` encodes the statutory retention period; the exact duration must be
 /// confirmed against DGFiP guidance before go-live.
+///
+/// ## An entry is a record about one invoice, not a record about the bytes
+///
+/// The distinction cost us a bug. The uniqueness here was originally `(tenantId, contentHash)`,
+/// which reads as "these bytes are archived once per tenant" - true of the *blob*, and the store
+/// already guarantees it, since `storageKey` is derived from the hash and identical bytes rewrite
+/// to the same key.
+///
+/// But an entry is not the blob. It says *this invoice's* artifact is these bytes, and it carries
+/// that invoice's retention deadline. One set of bytes is legitimately two invoices whenever a
+/// cabinet manages both sides of a trade: company A invoices company B, both are the tenant's
+/// client businesses, and the identical PDF is A's issued invoice and B's received one. Under the
+/// old constraint the second one silently got no entry at all - `seal` found the first and
+/// returned it - so a received invoice existed with no retrievable artifact, its download 404ed,
+/// and receiving it again failed on the invoice-number index instead of deduplicating.
 model ArchiveEntry {
   id        String  @id @default(cuid())
   tenantId  String
@@ -638,8 +653,12 @@ model ArchiveEntry {
   tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   invoice Invoice? @relation(fields: [invoiceId], references: [id])
 
-  @@unique([tenantId, contentHash])
+  /// Re-sealing the same artifact for the same invoice is idempotent; sealing it for a *different*
+  /// invoice is a different fact and gets its own row. Postgres treats NULLs as distinct, so this
+  /// does not constrain unattached entries - a partial index in the migration covers those.
+  @@unique([tenantId, invoiceId, contentHash])
   @@index([invoiceId])
+  @@index([tenantId, contentHash])
   @@index([retentionUntil])
 }
 
