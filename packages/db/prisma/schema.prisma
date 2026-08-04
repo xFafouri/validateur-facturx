@@ -490,6 +490,14 @@ model LifecycleStatus {
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
+  /// What makes polling idempotent.
+  ///
+  /// Statuses are fetched by a cursor, and any cursor that is not advanced transactionally with
+  /// the write it covers will re-deliver its last window after a crash. Deduplicating in the
+  /// database rather than by reading first means two concurrent pollers cannot both check, both
+  /// find nothing, and both insert. Two genuinely distinct events sharing a code *and* a
+  /// timestamp to the millisecond is not something a platform emits; a replay is.
+  @@unique([invoiceId, code, occurredAt])
   @@index([invoiceId, occurredAt])
 }
 
@@ -510,13 +518,34 @@ model PdpConnection {
   peppolAddress String?
 
   active    Boolean  @default(true)
+
+  // Poll watermarks, one per flow, because the two move independently: a burst of inbound
+  // invoices must not drag the status cursor past statuses that have not been read yet.
+  //
+  // Deliberately *behind* the truth. Each is advanced only to the timestamp of the last item
+  // actually written, so a crash mid-batch re-reads that item rather than skipping it. Re-reading
+  // is free - statuses deduplicate on their unique constraint and inbound invoices on their
+  // content hash - whereas skipping loses a payable or a status that feeds a VAT return.
+  statusCursor  DateTime?
+  inboundCursor DateTime?
+  lastPolledAt  DateTime?
+
+  /// Outcome of the last credential check, so the settings screen can show a connection is broken
+  /// before an invoice fails to send rather than after.
+  lastVerifiedAt DateTime?
+  lastError      String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   clientOrg     ClientOrg      @relation(fields: [clientOrgId], references: [id], onDelete: Cascade)
   transmissions Transmission[]
 
+  /// One connection per platform per business. A second row for the same adapter would be two
+  /// sets of credentials for one account, and nothing could say which is authoritative.
+  @@unique([clientOrgId, provider])
   @@index([clientOrgId])
+  @@index([active])
 }
 
 enum TransmissionState {
@@ -526,10 +555,18 @@ enum TransmissionState {
   FAILED
 }
 
-/// One attempt to hand an invoice to a platform.
+/// One invoice's handover to a platform - and the queue that drives it.
 ///
-/// Separate from Invoice because transmission is retried: the invoice has one state, but it may
-/// have many attempts, and the failure history matters when a client disputes delivery.
+/// Separate from Invoice because transmission is retried: the invoice has one state, but the
+/// handover may take many attempts, and the failure history matters when a client disputes
+/// delivery.
+///
+/// **This table is the queue.** There is no broker. A job for a send that never happened, or two
+/// jobs for one send, are both duplicate invoices at the buyer - a fiscal problem, not a
+/// technical one - and no amount of care in application code makes a write to Redis and a write
+/// to Postgres agree. Here the row *is* the work item, so enqueueing is the same commit as the
+/// state change that justified it, and `idempotencyKey` is a database constraint rather than a
+/// convention. Workers claim rows with `FOR UPDATE SKIP LOCKED`; see `TransmissionService`.
 model Transmission {
   id              String @id @default(cuid())
   invoiceId       String
@@ -537,11 +574,26 @@ model Transmission {
 
   state    TransmissionState @default(PENDING)
   /// Deduplication key sent to the platform so a retry cannot produce a duplicate invoice.
+  ///
+  /// Derived from the sealed content hash, not generated per attempt: the same document must
+  /// present the same key however many times we try to hand it over. Unique across the table, so
+  /// a double enqueue is refused by Postgres instead of being caught by a prior read that two
+  /// concurrent callers could both pass.
   idempotencyKey String  @unique
   attempt        Int     @default(1)
   /// Identifier the platform assigned, once known.
   externalId     String?
   lastError      String?
+
+  /// When this row next becomes eligible. Exponential backoff writes the future here.
+  nextAttemptAt DateTime @default(now())
+  /// Lease held by the worker currently running this row, and by whom.
+  ///
+  /// A claim that is never released - the worker was killed mid-attempt - is reclaimable once the
+  /// lease goes stale. Without it, one `kill -9` strands an invoice as PENDING forever, which is
+  /// indistinguishable to the user from us having silently dropped it.
+  claimedAt DateTime?
+  claimedBy String?
 
   createdAt   DateTime  @default(now())
   sentAt      DateTime?
@@ -552,6 +604,9 @@ model Transmission {
 
   @@index([invoiceId])
   @@index([state])
+  /// The claim query's index: due work, oldest first.
+  @@index([state, nextAttemptAt])
+  @@index([externalId])
 }
 
 // ---------------------------------------------------------------------------

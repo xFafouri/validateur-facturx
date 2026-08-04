@@ -4,12 +4,14 @@ A _Solution Compatible_ (SC) for France's 2026–2027 B2B e-invoicing mandate, a
 underserved long tail: micro-businesses, accountants managing many small clients, and niche
 software with no native e-invoicing.
 
-**Status: Phases 0 and 1 complete; reception built.** The free public validator runs, backed by a
-real Schematron engine, with every rule explained in French. Invoices are _generated_ — PDF/A-3
-with embedded `factur-x.xml` — self-validated against that same engine, persisted, and sealed into
-an immutable content-addressed archive. A signed-in user can add the businesses they invoice for,
-issue an invoice through the UI, **receive supplier invoices**, and download the sealed documents.
-See [Roadmap](#roadmap).
+**Status: Phases 0 and 1 complete; Phase 2 connected end to end against a sandbox platform.** The
+free public validator runs, backed by a real Schematron engine, with every rule explained in
+French. Invoices are _generated_ — PDF/A-3 with embedded `factur-x.xml` — self-validated against
+that same engine, persisted, and sealed into an immutable content-addressed archive. A signed-in
+user can add the businesses they invoice for, issue an invoice through the UI, **receive supplier
+invoices**, and download the sealed documents. Issued invoices are now **queued, transmitted to a
+certified platform and tracked through their lifecycle statuses**, and invoices addressed to a
+client arrive by polling as well as by upload. See [Roadmap](#roadmap).
 
 > **Why reception came before the rest of Phase 2.** The 1 September 2026 obligation that applies
 > to _every_ VAT-registered business is the obligation to **receive**. Issuing is phased: large
@@ -65,7 +67,7 @@ invoices must install one (`fonts-dejavu-core`) or point `FACTURX_FONT_REGULAR` 
 | Path                 | What it is                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `apps/web`           | Next.js. Public French validator, SEO landing page, and the signed-in invoicing UI. **Built.**                |
-| `apps/api`           | NestJS. Validation, invoicing and archiving implemented; PDP and billing are skeletons.                       |
+| `apps/api`           | NestJS. Validation, invoicing, archiving and platform transmission implemented; billing is a skeleton.        |
 | `packages/facturx`   | Core: CII parsing/serialising, PDF/A-3 extraction and assembly, validation, French rule catalogue. **Built.** |
 | `packages/auth`      | Password hashing and server-side sessions, shared by the web app and the API. **Built.**                      |
 | `packages/mail`      | Outbound transactional mail: a transport port with SMTP, console and in-memory drivers. **Built.**            |
@@ -219,19 +221,27 @@ a tenant could see and do everything. For a product where one cabinet holds seve
 businesses' books that is a liability rather than a missing feature: the whole point of
 `CLIENT_USER` is a login you can hand to a client without handing them their neighbours' books.
 
-|                        | `OWNER` | `ACCOUNTANT` | `CLIENT_USER`      |
-| ---------------------- | ------- | ------------ | ------------------ |
-| Read client businesses | all     | all          | **assigned only**  |
-| Add a client business  | ✅      | ✅           | ❌                 |
-| Read invoices          | all     | all          | **assigned only**  |
-| Issue an invoice       | ✅      | ✅           | ❌                 |
-| Receive an invoice     | ✅      | ✅           | ✅ (assigned only) |
-| Manage users           | ✅      | ❌           | ❌                 |
+|                          | `OWNER` | `ACCOUNTANT` | `CLIENT_USER`      |
+| ------------------------ | ------- | ------------ | ------------------ |
+| Read client businesses   | all     | all          | **assigned only**  |
+| Add a client business    | ✅      | ✅           | ❌                 |
+| Read invoices            | all     | all          | **assigned only**  |
+| Issue an invoice         | ✅      | ✅           | ❌                 |
+| Receive an invoice       | ✅      | ✅           | ✅ (assigned only) |
+| Transmit to the platform | ✅      | ✅           | ❌                 |
+| Read delivery status     | ✅      | ✅           | ✅ (assigned only) |
+| Connect a platform       | ✅      | ✅           | ❌                 |
+| Manage users             | ✅      | ❌           | ❌                 |
 
 `CLIENT_USER` cannot issue because issuing writes into a ten-year legal archive under the cabinet's
 numbering sequence, and a restricted login doing that unsupervised is the risk the role exists to
 avoid. It _can_ receive, because dropping in a supplier's invoice is exactly the errand you want a
 client running for themselves.
+
+Transmission follows issuance rather than reception: putting a document into the official circuit
+in a business's name is the same act as issuing it, one step later. Reading delivery status is the
+exception granted to everyone — "has my invoice arrived" is a question about the client's own
+document, and refusing it just turns into a phone call to the cabinet.
 
 **Permissions and scope are separate mechanisms and both are always required.** A permission check
 that passes says the role may issue invoices at all; it says nothing about on whose behalf. Scope
@@ -364,6 +374,95 @@ now partial indexes written by hand in [the migration](packages/db/prisma/migrat
 
 ---
 
+## Transmission and lifecycle statuses
+
+Everything platform-specific sits behind
+[`PdpProvider`](apps/api/src/pdp/pdp-provider.ts). Nothing above that interface knows which
+platform a business uses — businesses switch, an accountant's clients sit on several at once, and
+PEPPOL eDelivery should later be one more implementation rather than a rewrite.
+
+### The queue is a Postgres table, not a broker
+
+Redis is in the stack, and the transmission queue deliberately does not use it.
+
+The failure that must never happen is an invoice arriving at the buyer **twice, or not at all**.
+Both are fiscal events rather than technical ones: a duplicate is a document the buyer may book and
+pay, and a silent drop is a receivable nobody chases. Enqueueing to a broker is a second write that
+cannot join the transaction which decided the invoice was ready, so whichever order you pick, one
+crash window either loses jobs or duplicates them — and you are left reconciling two stores that
+disagree about invoices.
+
+So the [`Transmission`](packages/db/prisma/schema.prisma) row **is** the work item. Enqueueing
+commits with the state change that justified it, `idempotencyKey` is a unique constraint rather
+than a convention, and workers claim rows with `FOR UPDATE SKIP LOCKED` — the same primitive a
+broker would be using underneath. Redis keeps the jobs it is good at, and stays out of the path
+where correctness is measured in invoices.
+
+**Idempotency is three layers, each covering what the one before cannot**
+([`transmission.service.ts`](apps/api/src/pdp/transmission.service.ts)):
+
+1. **Enqueue** derives its key from the sealed content hash, so a double enqueue is refused by the
+   database rather than caught by a read two callers could both pass.
+2. **Claim** takes a lease, so two workers cannot run one row at once — and a lease left by a killed
+   worker goes stale and is reclaimed, rather than stranding the invoice as pending forever.
+3. **The platform** is told the key, which is the only thing that helps with the genuinely
+   ambiguous failure: the request arrived and the response did not.
+
+Issuance never calls into this module. It leaves an invoice in `VALIDATED`, and the sweep queues
+exactly those — **the invoice's own state is the outbox**. That keeps the module dependency
+pointing one way (inbound polling needs `ReceptionService`, so the arrow has to), and it means an
+invoice queued by a request that then died still gets sent.
+
+### Statuses
+
+Platforms express lifecycle statuses differently and the DGFiP numbering has already moved once, so
+[`lifecycle.ts`](apps/api/src/pdp/lifecycle.ts) defines **our** vocabulary and each adapter
+translates onto it. The platform's original message is kept verbatim in `LifecycleStatus.payload`,
+so nothing the mapping discards is lost.
+
+Statuses do not arrive in order — platforms batch and retry them — so invoice state is a function of
+the **furthest point reached**, not the most recently received message. Without that ranking a late
+`DEPOSEE` would walk a delivered invoice backwards on the user's screen. The history stays
+complete either way: every status is appended, including the late one; only the summary state is
+monotonic.
+
+### Polling, not webhooks
+
+A missed webhook is silent, and both flows here fail dangerously when they fail silently: a missed
+status leaves an invoice showing as sent when the buyer has refused it, and a missed inbound invoice
+is a payable nobody knows about. Polling's error is bounded by one interval. Webhooks, where a
+platform offers them, should trigger an early poll rather than replace one.
+
+Cursors **lag on purpose**. Each is advanced only as far as the last item actually written, so a
+crash mid-batch re-reads rather than skips. Re-reading costs nothing — statuses deduplicate on a
+unique constraint, inbound invoices on their content hash — and skipping loses a payable.
+
+### Credentials
+
+`PdpConnection` holds the secret that lets us submit invoices in a business's name, so it is
+encrypted with AES-256-GCM before it reaches the database
+([`credentials.ts`](apps/api/src/pdp/credentials.ts)), keyed from `PDP_CREDENTIALS_KEY` and never
+from the database — which is what makes a stolen backup useless on its own. There is no default and
+no generated fallback: without the key, saving a credential is refused rather than stored in clear.
+**Credentials go in and never come out** — no route returns them, decrypted or otherwise.
+
+The envelope carries a version byte, so moving to KMS-wrapped data keys once the hosting region is
+decided is a new version that reads the old one, not an irreversible migration.
+
+### What Phase 2 changed in the schema
+
+- **`LifecycleStatus` gained a unique `(invoiceId, code, occurredAt)`.** It is what makes a lagging
+  cursor safe, and deduplicating in the database means two concurrent pollers cannot both check,
+  both find nothing, and both insert.
+- **`Transmission` became a queue** — `nextAttemptAt` for backoff, `claimedAt`/`claimedBy` for the
+  lease — with `CHECK` constraints that a lease is whole, and that a `SENT` row carries the
+  evidence (`externalId`, `sentAt`) it exists to provide.
+- **One active platform per business**, as a partial unique index. Two active connections would give
+  "where does this invoice go" two answers; switching platforms deactivates the old one rather than
+  deleting it, because its transmissions are evidence.
+
+---
+
 ## Correctness notes
 
 **Money is never a float.** All amounts are exact `bigint`-backed decimals
@@ -399,10 +498,13 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**199 tests**, including 19 core integration tests and 10 issuance tests against the live engine —
-the latter also against a real Postgres, because a mocked client would happily accept a `number`
-where the schema wants `NUMERIC` and prove nothing about the cent that matters. The integration suite skips
-itself when the sidecar is unreachable, so `pnpm test` works without Docker.
+**360 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
+mocked client would happily accept a `number` where the schema wants `NUMERIC` and prove nothing
+about the cent that matters — and because the transmission queue's guarantees are the database's:
+that a double enqueue is refused by a unique constraint, that `FOR UPDATE SKIP LOCKED` gives two
+concurrent workers disjoint rows, and that a replayed send resolves to the original transmission
+rather than a second invoice at the buyer. All of them skip themselves when the sidecar or Postgres
+is unreachable, so `pnpm test` works without Docker.
 
 ---
 
@@ -417,11 +519,17 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
   Authentication ([`packages/auth`](packages/auth)) and the invoicing UI
   ([`apps/web/src/app/(app)`](apps/web/src/app)) close the phase: issuance is now behind a session
   guard that resolves the acting tenant from a session row, never from the request.
-- **Phase 2 — platform connection.** 🚧 Reception is built
+- **Phase 2 — platform connection.** 🚧 Reception
   ([`reception.service.ts`](apps/api/src/invoicing/reception.service.ts)): a supplier invoice is
   analysed, routed to the right client business by its buyer identifiers, recorded and sealed.
-  Still to build: transmission and lifecycle statuses behind `PdpProvider`, queue-based and
-  idempotent, and a transport other than manual upload.
+  Transmission and lifecycle statuses now sit behind `PdpProvider`
+  ([`apps/api/src/pdp`](apps/api/src/pdp)) — a Postgres-backed queue that is idempotent at three
+  layers, exponential backoff with a lease, DGFiP status ingestion that cannot walk an invoice
+  backwards, and encrypted per-business credentials. Inbound polling gives reception a second
+  doorway, so upload is no longer the only transport.
+  **Still to build:** an adapter for a real certified platform (the sandbox provider is what the
+  pipeline is proven against), the UI for connecting a business and watching a status timeline, and
+  webhooks to trigger an early poll.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
 - **Phase 4 — e-reporting, more platforms, embeddable API.**
 
@@ -435,12 +543,19 @@ itself when the sidecar is unreachable, so `pnpm test` works without Docker.
 | Scaffold                | Full monorepo, Phase 0 implemented                  |
 | Authentication          | Self-hosted: scrypt passwords, sessions in Postgres |
 | Authorisation           | Static role matrix + per-query client-org scope     |
+| Transmission queue      | Postgres outbox + `SKIP LOCKED`, not a broker       |
+| Platform credentials    | AES-256-GCM at the application layer, key from env  |
 
 ### Still open
 
-Which certified platform to integrate first; hosting region and topology (**must be EU** — French
-tax data) and with it the production object store; Stripe price points. Mail needs a domain with
-SPF and DKIM records before it can send anywhere real.
+Which certified platform to integrate first — the pipeline is built and proven against the sandbox
+provider, so this is now an adapter and a set of sandbox credentials rather than a design question.
+Hosting region and topology (**must be EU** — French tax data) and with it the production object
+store, and whether `PDP_CREDENTIALS_KEY` becomes a KMS-wrapped data key once that is decided. Stripe
+price points. Mail needs a domain with SPF and DKIM records before it can send anywhere real.
+
+The **exact lifecycle status codes** each platform emits, and which of our vocabulary they map onto,
+have to come from that platform's own documentation — see the disclaimer below.
 
 ---
 

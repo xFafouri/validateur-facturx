@@ -33,6 +33,9 @@ export type Permission =
   | 'invoice:issue'
   | 'invoice:receive'
   | 'invoice:download'
+  | 'invoice:transmit'
+  | 'pdp:read'
+  | 'pdp:manage'
   | 'user:manage';
 
 /**
@@ -47,6 +50,12 @@ export type Permission =
  *   numbering sequence, and a restricted login doing that unsupervised is the risk this role
  *   exists to avoid. Receiving is allowed, because dropping in a supplier's invoice is exactly
  *   the errand you want a client doing for themselves.
+ *
+ * Transmission follows issuance rather than reception: putting a document into the official
+ * circuit in a business's name is the same act as issuing it, one step later. `pdp:read` is the
+ * exception granted to everyone, because "has my invoice been delivered" is a question a client
+ * is entitled to answer for themselves - it is about their own document, and refusing it just
+ * turns into a phone call to the cabinet.
  */
 export const ROLE_PERMISSIONS: Readonly<Record<UserRole, readonly Permission[]>> = {
   OWNER: [
@@ -56,6 +65,9 @@ export const ROLE_PERMISSIONS: Readonly<Record<UserRole, readonly Permission[]>>
     'invoice:issue',
     'invoice:receive',
     'invoice:download',
+    'invoice:transmit',
+    'pdp:read',
+    'pdp:manage',
     'user:manage',
   ],
   ACCOUNTANT: [
@@ -65,8 +77,17 @@ export const ROLE_PERMISSIONS: Readonly<Record<UserRole, readonly Permission[]>>
     'invoice:issue',
     'invoice:receive',
     'invoice:download',
+    'invoice:transmit',
+    'pdp:read',
+    'pdp:manage',
   ],
-  CLIENT_USER: ['clientOrg:read', 'invoice:read', 'invoice:receive', 'invoice:download'],
+  CLIENT_USER: [
+    'clientOrg:read',
+    'invoice:read',
+    'invoice:receive',
+    'invoice:download',
+    'pdp:read',
+  ],
 };
 
 /** Roles that see every client business of their tenant. */
@@ -135,6 +156,10 @@ export function permissionDeniedMessage(role: UserRole, permission: Permission):
       "Votre accès ne permet pas d'émettre des factures. Contactez le cabinet qui gère votre compte.",
     'clientOrg:create':
       "Votre accès ne permet pas d'ajouter une entreprise. Contactez le cabinet qui gère votre compte.",
+    'invoice:transmit':
+      'Votre accès ne permet pas de transmettre des factures à la plateforme. Contactez le cabinet qui gère votre compte.',
+    'pdp:manage':
+      'Le raccordement à une plateforme de dématérialisation est réservé au cabinet : il met en jeu les identifiants de connexion de votre entreprise.',
   };
 
   return (
