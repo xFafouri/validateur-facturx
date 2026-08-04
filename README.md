@@ -43,7 +43,7 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 199 tests
+pnpm verify   # build + format check + typecheck + 362 tests
 ```
 
 The invoicing and archiving suites need Postgres as well, and skip without it:
