@@ -213,6 +213,35 @@ suite('client-org scoping', () => {
     expect((await get(`/client-orgs/${orgB}`, client)).status).toBe(404);
   });
 
+  /**
+   * The detail route now carries counts, so a 404 is protecting more than a name and an address.
+   * It also counts for one business rather than reading the overview and picking a row, which is a
+   * second place the predicate could go missing.
+   */
+  it("reports a business's own counts on its detail, and still 404s outside scope", async () => {
+    await post('/invoices', ownerCookie, invoicePayload(orgB, `DET-${run}`));
+
+    const detail = await get(`/client-orgs/${orgB}`, ownerCookie).then((r) => r.json());
+    expect(detail.status.issued).toBeGreaterThan(0);
+    expect(detail.status).toMatchObject({
+      received: expect.any(Number),
+      blockers: expect.any(Array),
+    });
+
+    const client = await makeUser('client-detail-counts', 'CLIENT_USER', [orgA]);
+    expect((await get(`/client-orgs/${orgB}`, client)).status).toBe(404);
+
+    // Its own business still answers, with counts that are its own rather than the tenant's. The
+    // check that means something is that the same business reports the same number to a scoped
+    // caller and to the owner: a count contaminated by orgB would differ between the two.
+    const own = await get(`/client-orgs/${orgA}`, client).then((r) => r.json());
+    const ownAsOwner = await get(`/client-orgs/${orgA}`, ownerCookie).then((r) => r.json());
+
+    expect(own.id).toBe(orgA);
+    expect(own.status.issued).toBe(ownAsOwner.status.issued);
+    expect(own.status.received).toBe(ownAsOwner.status.received);
+  });
+
   it("does not list another business's invoices, even when asked for them by id", async () => {
     await post('/invoices', ownerCookie, invoicePayload(orgB, `B-${run}`));
     const client = await makeUser('client-liste', 'CLIENT_USER', [orgA]);

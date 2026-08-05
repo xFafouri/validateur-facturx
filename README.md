@@ -44,7 +44,7 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 383 tests
+pnpm verify   # build + format check + typecheck + 384 tests
 ```
 
 The invoicing and archiving suites need Postgres as well, and skip without it:
@@ -590,7 +590,7 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**383 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
+**384 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
 mocked client would happily accept a `number` where the schema wants `NUMERIC` and prove nothing
 about the cent that matters — and because the transmission queue's guarantees are the database's:
 that a double enqueue is refused by a unique constraint, that `FOR UPDATE SKIP LOCKED` gives two
@@ -629,8 +629,10 @@ is unreachable, so `pnpm test` works without Docker.
   the screens stop being built for one business. `GET /client-orgs/overview`
   ([`client-orgs.controller.ts`](apps/api/src/invoicing/client-orgs.controller.ts)) answers "which
   of my clients needs me today" in a fixed six aggregates, and the dashboard leads with that
-  worklist rather than with three totals. **Still to build:** a per-client detail page, bulk
-  issue/monitor actions, and per-client archive export.
+  worklist rather than with three totals. [`/clients/[id]`](<apps/web/src/app/(app)/clients/[id]>)
+  gives one business its own page — counts, blockers paired with the screen that clears each one,
+  its raccordement, and its recent invoices. **Still to build:** bulk issue/monitor actions, and
+  per-client archive export.
 - **Phase 4 — e-reporting, more platforms, embeddable API.**
 
 ### Decisions taken

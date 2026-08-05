@@ -35,6 +35,28 @@ function sum<T>(rows: readonly T[], of: (row: T) => number): number {
   return rows.reduce((total, row) => total + of(row), 0);
 }
 
+/**
+ * Why a business is not ready to trade, as codes rather than as a boolean.
+ *
+ * Shared by the overview and the detail route deliberately. A business reported ready on the list
+ * and blocked on its own page - or the reverse - is worse than either answer on its own, and two
+ * copies of a three-line rule is exactly how that happens.
+ *
+ * Codes, not sentences: the caller renders them, so the wording can change without a deployment
+ * of the API, and a client that does not know a code can still show it.
+ */
+function blockersFor(
+  org: { addressLine1: string | null; postcode: string | null; city: string | null },
+  connection: unknown | null,
+): string[] {
+  const blockers: string[] = [];
+  // EN 16931 requires a full seller address. Without one the invoice is refused at validation,
+  // which is a failure at issue time rather than a cosmetic gap in a profile.
+  if (!org.addressLine1 || !org.postcode || !org.city) blockers.push('ADRESSE_INCOMPLETE');
+  if (!connection) blockers.push('AUCUN_RACCORDEMENT');
+  return blockers;
+}
+
 @Controller('client-orgs')
 @UseGuards(SessionGuard, PermissionGuard)
 export class ClientOrgsController {
@@ -155,12 +177,7 @@ export class ClientOrgsController {
 
     const clientOrgs = orgs.map((org) => {
       const connection = connectionBy.get(org.id) ?? null;
-
-      // Stated as reasons rather than as a boolean, because "not ready" without the reason just
-      // moves the investigation somewhere else. Both are things the user can go and fix.
-      const blockers: string[] = [];
-      if (!org.addressLine1 || !org.postcode || !org.city) blockers.push('ADRESSE_INCOMPLETE');
-      if (!connection) blockers.push('AUCUN_RACCORDEMENT');
+      const blockers = blockersFor(org, connection);
 
       return {
         id: org.id,
@@ -198,6 +215,17 @@ export class ClientOrgsController {
     };
   }
 
+  /**
+   * One business, with the same standing the overview reports for it.
+   *
+   * Counted for this business alone rather than by reading the overview and picking a row out of
+   * it: the overview scans every business the caller can see, which is work worth doing once for a
+   * dashboard and absurd for a page about one client.
+   *
+   * The counts are safe to key on `clientOrgId` directly because the lookup above has already
+   * failed closed if this business is out of scope - so by the time they run, the id has been
+   * proven to belong to the caller.
+   */
   @Get(':id')
   @RequirePermission('clientOrg:read')
   async detail(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
@@ -205,7 +233,45 @@ export class ClientOrgsController {
       where: { id, tenantId: user.tenantId, ...clientOrgIdScope(user) },
     });
     if (!clientOrg) throw new NotFoundException('Entreprise cliente introuvable.');
-    return clientOrg;
+
+    const scoped = { tenantId: user.tenantId, clientOrgId: clientOrg.id };
+
+    const [issued, received, nonConforming, queued, stuck, connection] = await Promise.all([
+      this.prisma.invoice.count({ where: { ...scoped, direction: 'ISSUED' } }),
+      this.prisma.invoice.count({ where: { ...scoped, direction: 'RECEIVED' } }),
+      this.prisma.invoice.count({
+        where: { ...scoped, direction: 'RECEIVED', lastValidationValid: false },
+      }),
+      this.prisma.invoice.count({ where: { ...scoped, direction: 'ISSUED', state: 'QUEUED' } }),
+      this.prisma.invoice.count({
+        where: { ...scoped, transmissions: { some: { state: 'FAILED' } } },
+      }),
+      this.prisma.pdpConnection.findFirst({
+        where: { clientOrgId: clientOrg.id, active: true },
+        select: { id: true, provider: true, label: true, lastVerifiedAt: true, lastError: true },
+      }),
+    ]);
+
+    return {
+      ...clientOrg,
+      status: {
+        issued,
+        received,
+        nonConforming,
+        queued,
+        stuck,
+        connection: connection
+          ? {
+              id: connection.id,
+              provider: connection.provider,
+              label: connection.label,
+              verified: connection.lastVerifiedAt !== null,
+              lastError: connection.lastError,
+            }
+          : null,
+        blockers: blockersFor(clientOrg, connection),
+      },
+    };
   }
 
   @Post()

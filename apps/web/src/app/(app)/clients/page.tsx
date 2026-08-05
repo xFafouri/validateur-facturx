@@ -91,7 +91,14 @@ export default async function ClientsPage({
           {clientOrgs.map((org) => (
             <li key={org.id} className="rounded-lg border border-navy-100 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
-                <h2 className="font-semibold text-navy-900">{org.name}</h2>
+                <h2 className="font-semibold text-navy-900">
+                  <Link
+                    href={`/clients/${org.id}`}
+                    className="underline decoration-navy-200 underline-offset-2 hover:decoration-navy-500"
+                  >
+                    {org.name}
+                  </Link>
+                </h2>
                 <span className="shrink-0 rounded bg-navy-50 px-2 py-0.5 text-xs font-medium text-navy-600">
                   {org.defaultProfile}
                 </span>

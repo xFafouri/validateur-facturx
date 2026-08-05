@@ -269,7 +269,7 @@ function AttentionTable({ orgs }: { orgs: readonly ClientOrgOverview[] }) {
               <tr key={org.id} className="border-b border-navy-50 last:border-0">
                 <td className="px-4 py-3">
                   <Link
-                    href={`/factures?clientOrgId=${org.id}`}
+                    href={`/clients/${org.id}`}
                     className="font-medium text-navy-900 underline decoration-navy-200 underline-offset-2"
                   >
                     {org.name}

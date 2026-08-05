@@ -139,6 +139,39 @@ export interface ClientOrgOverview {
   blockers: string[];
 }
 
+/** One business in full, with the same standing the overview reports for it. */
+export interface ClientOrgDetail {
+  id: string;
+  name: string;
+  siren: string;
+  siret: string | null;
+  vatNumber: string | null;
+  eInvoicingAddress: string | null;
+  eInvoicingScheme: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  postcode: string | null;
+  city: string | null;
+  countryCode: string;
+  defaultProfile: string;
+  createdAt: string;
+  status: {
+    issued: number;
+    received: number;
+    nonConforming: number;
+    queued: number;
+    stuck: number;
+    connection: {
+      id: string;
+      provider: string;
+      label: string | null;
+      verified: boolean;
+      lastError: string | null;
+    } | null;
+    blockers: string[];
+  };
+}
+
 export interface ClientOrgOverviewPage {
   totals: {
     clientOrgs: number;
