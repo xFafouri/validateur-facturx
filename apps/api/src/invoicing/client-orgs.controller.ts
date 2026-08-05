@@ -21,10 +21,19 @@ import {
 import { sirenFromSiret, validateSiren, validateSiret } from '@facturx/core';
 import type { AuthenticatedUser } from '@facturx/auth';
 import { PermissionGuard, RequirePermission } from '../auth/permission.guard';
-import { clientOrgIdScope } from '../auth/scope';
+import { clientOrgIdScope, clientOrgScope } from '../auth/scope';
 import { CurrentUser, SessionGuard } from '../auth/session.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClientOrgDto } from './dto/client-org.dto';
+
+/** Collapses a Prisma `groupBy` result into a lookup, so the merge below is a map read. */
+function countBy(rows: readonly { clientOrgId: string; _count: { _all: number } }[]) {
+  return new Map(rows.map((row) => [row.clientOrgId, row._count._all]));
+}
+
+function sum<T>(rows: readonly T[], of: (row: T) => number): number {
+  return rows.reduce((total, row) => total + of(row), 0);
+}
 
 @Controller('client-orgs')
 @UseGuards(SessionGuard, PermissionGuard)
@@ -53,6 +62,140 @@ export class ClientOrgsController {
         _count: { select: { invoices: true } },
       },
     });
+  }
+
+  /**
+   * What needs attention, across every business at once.
+   *
+   * The screens this backs were built for a tenant with three client businesses, and an accountant
+   * has two hundred. At that size a list of names and a total invoice count answers nothing: the
+   * question is "which of my clients needs me today", and answering it by opening each one in turn
+   * is the manual work this product is supposed to remove.
+   *
+   * **Declared before `:id`, and it has to stay there.** Routes match in declaration order, so a
+   * `@Get(':id')` above this one would swallow `/overview` and try to load a business with that id.
+   *
+   * ## A fixed number of queries
+   *
+   * Six aggregates, whatever the client count. The obvious implementation - loop the businesses and
+   * count each one's invoices - is the one that works in development against three rows and falls
+   * over in front of the customer this feature exists for. Grouping in the database keeps the cost
+   * flat.
+   *
+   * ## Where the scoping actually bites
+   *
+   * Every aggregate carries the tenant and scope predicates, but that is defence in depth rather
+   * than the thing that makes this safe. What makes it safe is that **`orgs` is the only list**:
+   * each count is read out of a map keyed by an id from it, and the totals are summed from the
+   * merged rows rather than from the raw `groupBy` results. A count belonging to a business out of
+   * scope is therefore never read, even if a future predicate goes missing.
+   *
+   * That ordering is deliberate and worth preserving. Summing `_count` straight off a `groupBy` -
+   * the shorter thing to write - would make every total silently depend on a predicate six lines
+   * away, and a total is a disclosure too: "12 non-conforming invoices" tells a client user about
+   * eleven documents they may not open.
+   */
+  @Get('overview')
+  @RequirePermission('clientOrg:read')
+  async overview(@CurrentUser() user: AuthenticatedUser) {
+    const scope = { tenantId: user.tenantId, ...clientOrgIdScope(user) };
+    const invoiceScope = { tenantId: user.tenantId, ...clientOrgScope(user) };
+
+    const [orgs, byDirection, nonConforming, queued, stuck, connections] = await Promise.all([
+      this.prisma.clientOrg.findMany({
+        where: { ...scope, archivedAt: null },
+        orderBy: { name: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          siren: true,
+          siret: true,
+          addressLine1: true,
+          postcode: true,
+          city: true,
+        },
+      }),
+      this.prisma.invoice.groupBy({
+        by: ['clientOrgId', 'direction'],
+        where: invoiceScope,
+        _count: { _all: true },
+      }),
+      this.prisma.invoice.groupBy({
+        by: ['clientOrgId'],
+        // All of them, not a sample of the most recent. The dashboard previously counted
+        // non-conforming invoices among the last five it happened to fetch and presented that as
+        // the total, which reads as "nothing is wrong" for any tenant with a sixth invoice.
+        where: { ...invoiceScope, direction: 'RECEIVED', lastValidationValid: false },
+        _count: { _all: true },
+      }),
+      this.prisma.invoice.groupBy({
+        by: ['clientOrgId'],
+        where: { ...invoiceScope, direction: 'ISSUED', state: 'QUEUED' },
+        _count: { _all: true },
+      }),
+      this.prisma.invoice.groupBy({
+        by: ['clientOrgId'],
+        // Counted as *invoices with a parked transmission* rather than as transmission rows: a
+        // document that failed six times is one problem to chase, not six.
+        where: { ...invoiceScope, transmissions: { some: { state: 'FAILED' } } },
+        _count: { _all: true },
+      }),
+      this.prisma.pdpConnection.findMany({
+        where: { active: true, clientOrg: { ...scope } },
+        select: { clientOrgId: true, provider: true, lastVerifiedAt: true, lastError: true },
+      }),
+    ]);
+
+    const issued = countBy(byDirection.filter((row) => row.direction === 'ISSUED'));
+    const received = countBy(byDirection.filter((row) => row.direction === 'RECEIVED'));
+    const nonConformingBy = countBy(nonConforming);
+    const queuedBy = countBy(queued);
+    const stuckBy = countBy(stuck);
+    const connectionBy = new Map(connections.map((row) => [row.clientOrgId, row]));
+
+    const clientOrgs = orgs.map((org) => {
+      const connection = connectionBy.get(org.id) ?? null;
+
+      // Stated as reasons rather than as a boolean, because "not ready" without the reason just
+      // moves the investigation somewhere else. Both are things the user can go and fix.
+      const blockers: string[] = [];
+      if (!org.addressLine1 || !org.postcode || !org.city) blockers.push('ADRESSE_INCOMPLETE');
+      if (!connection) blockers.push('AUCUN_RACCORDEMENT');
+
+      return {
+        id: org.id,
+        name: org.name,
+        siren: org.siren,
+        issued: issued.get(org.id) ?? 0,
+        received: received.get(org.id) ?? 0,
+        nonConforming: nonConformingBy.get(org.id) ?? 0,
+        queued: queuedBy.get(org.id) ?? 0,
+        stuck: stuckBy.get(org.id) ?? 0,
+        connection: connection
+          ? {
+              provider: connection.provider,
+              verified: connection.lastVerifiedAt !== null,
+              lastError: connection.lastError,
+            }
+          : null,
+        blockers,
+      };
+    });
+
+    return {
+      totals: {
+        clientOrgs: clientOrgs.length,
+        issued: sum(clientOrgs, (org) => org.issued),
+        received: sum(clientOrgs, (org) => org.received),
+        nonConforming: sum(clientOrgs, (org) => org.nonConforming),
+        queued: sum(clientOrgs, (org) => org.queued),
+        stuck: sum(clientOrgs, (org) => org.stuck),
+        notConnected: clientOrgs.filter((org) => org.connection === null).length,
+        connectionsInError: clientOrgs.filter((org) => org.connection?.lastError).length,
+        incomplete: clientOrgs.filter((org) => org.blockers.includes('ADRESSE_INCOMPLETE')).length,
+      },
+      clientOrgs,
+    };
   }
 
   @Get(':id')

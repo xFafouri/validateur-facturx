@@ -140,6 +140,17 @@ export const STATUS_SOURCE_LABELS: Record<string, string> = {
   PPF: 'Portail public',
 };
 
+/**
+ * Why a business is not ready, in the words of the thing to go and do about it.
+ *
+ * Phrased as the missing item rather than as a verdict: "adresse incomplète" tells an accountant
+ * which screen to open, where "non conforme" would only tell them to start looking.
+ */
+export const BLOCKER_LABELS: Record<string, string> = {
+  ADRESSE_INCOMPLETE: 'Adresse incomplète',
+  AUCUN_RACCORDEMENT: 'Aucune plateforme',
+};
+
 /** BT-3, UNTDID 1001. */
 export const TYPE_CODE_LABELS: Record<string, string> = {
   '380': 'Facture',

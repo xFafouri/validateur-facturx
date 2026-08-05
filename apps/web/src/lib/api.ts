@@ -116,6 +116,44 @@ export interface ClientOrgSummary {
   _count: { invoices: number };
 }
 
+/**
+ * One business's standing, as the cross-client overview reports it.
+ *
+ * Counts are over the whole archive, not a recent page of it — the distinction matters, because a
+ * total computed from a sample is what makes a dashboard say "nothing is wrong".
+ */
+export interface ClientOrgOverview {
+  id: string;
+  name: string;
+  siren: string;
+  issued: number;
+  received: number;
+  /** Received invoices the engine refused. Their supplier has to reissue. */
+  nonConforming: number;
+  /** Issued and waiting for the transmission worker. */
+  queued: number;
+  /** Invoices with a parked transmission — counted per invoice, not per attempt. */
+  stuck: number;
+  connection: { provider: string; verified: boolean; lastError: string | null } | null;
+  /** Why this business is not ready, as codes; see `BLOCKER_LABELS`. */
+  blockers: string[];
+}
+
+export interface ClientOrgOverviewPage {
+  totals: {
+    clientOrgs: number;
+    issued: number;
+    received: number;
+    nonConforming: number;
+    queued: number;
+    stuck: number;
+    notConnected: number;
+    connectionsInError: number;
+    incomplete: number;
+  };
+  clientOrgs: ClientOrgOverview[];
+}
+
 export type InvoiceDirection = 'ISSUED' | 'RECEIVED';
 
 export interface InvoiceSummary {

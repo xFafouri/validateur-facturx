@@ -11,6 +11,9 @@ export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 50;
 
+/** Above this many businesses, the pill row stops being a filter and becomes a second list. */
+const PILL_LIMIT = 12;
+
 export default async function InvoicesPage({
   searchParams,
 }: {
@@ -84,15 +87,23 @@ export default async function InvoicesPage({
         </FilterLink>
       </nav>
 
-      {clientOrgs.length > 1 ? (
+      {/*
+        Pills up to a point, then a select. An accountant with two hundred clients was previously
+        given two hundred pills, which is not a filter but a second list to search — and the whole
+        reason this page exists is that the first one is too long to read.
+
+        The select submits as a plain GET form: no client component, no JavaScript required, and
+        the resulting URL is the same shareable `?clientOrgId=` either way.
+      */}
+      {clientOrgs.length > 1 && clientOrgs.length <= PILL_LIMIT ? (
         <nav aria-label="Filtrer par entreprise" className="flex flex-wrap gap-2 text-sm">
-          <FilterLink href="/factures" active={!params.clientOrgId}>
+          <FilterLink href={directionHref(undefined, direction)} active={!params.clientOrgId}>
             Toutes
           </FilterLink>
           {clientOrgs.map((org) => (
             <FilterLink
               key={org.id}
-              href={`/factures?clientOrgId=${org.id}`}
+              href={directionHref(org.id, direction)}
               active={params.clientOrgId === org.id}
             >
               {org.name}
@@ -101,13 +112,47 @@ export default async function InvoicesPage({
         </nav>
       ) : null}
 
+      {clientOrgs.length > PILL_LIMIT ? (
+        <form method="GET" action="/factures" className="flex flex-wrap items-end gap-2">
+          {/* Preserved across the submit, or filtering by business would silently reset it. */}
+          {direction ? <input type="hidden" name="direction" value={direction} /> : null}
+          <div>
+            <label
+              htmlFor="clientOrgId"
+              className="block text-xs font-medium uppercase tracking-wide text-navy-500"
+            >
+              Entreprise
+            </label>
+            <select
+              id="clientOrgId"
+              name="clientOrgId"
+              defaultValue={params.clientOrgId ?? ''}
+              className="mt-1 block w-full max-w-sm rounded border border-navy-200 bg-white px-3 py-2 text-sm text-navy-900 focus:border-navy-500 focus:outline-none focus:ring-2 focus:ring-navy-200"
+            >
+              <option value="">Toutes les entreprises ({clientOrgs.length})</option>
+              {clientOrgs.map((org) => (
+                <option key={org.id} value={org.id}>
+                  {org.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="submit"
+            className="rounded border border-navy-200 bg-white px-4 py-2 text-sm font-semibold text-navy-800 hover:bg-navy-50"
+          >
+            Filtrer
+          </button>
+        </form>
+      ) : null}
+
       <InvoiceTable invoices={result.invoices} direction={direction} />
 
       {lastPage > 1 ? (
         <nav aria-label="Pagination" className="flex items-center justify-between text-sm">
           <PageLink
             enabled={page > 1}
-            href={pageHref(params.clientOrgId, page - 1)}
+            href={pageHref(params.clientOrgId, direction, page - 1)}
             label="← Précédentes"
           />
           <span className="text-navy-500">
@@ -115,7 +160,7 @@ export default async function InvoicesPage({
           </span>
           <PageLink
             enabled={page < lastPage}
-            href={pageHref(params.clientOrgId, page + 1)}
+            href={pageHref(params.clientOrgId, direction, page + 1)}
             label="Suivantes →"
           />
         </nav>
@@ -124,9 +169,21 @@ export default async function InvoicesPage({
   );
 }
 
-function pageHref(clientOrgId: string | undefined, page: number): string {
+/**
+ * Carries *every* active filter into the next page, not just the business.
+ *
+ * `direction` used to be dropped here, so paging through "Émises" quietly widened the list back to
+ * both directions — with the tab still highlighted, which is the version of this bug you do not
+ * notice.
+ */
+function pageHref(
+  clientOrgId: string | undefined,
+  direction: string | undefined,
+  page: number,
+): string {
   const query = new URLSearchParams({ page: String(page) });
   if (clientOrgId) query.set('clientOrgId', clientOrgId);
+  if (direction) query.set('direction', direction);
   return `/factures?${query}`;
 }
 

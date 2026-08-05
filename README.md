@@ -44,7 +44,7 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 380 tests
+pnpm verify   # build + format check + typecheck + 383 tests
 ```
 
 The invoicing and archiving suites need Postgres as well, and skip without it:
@@ -523,6 +523,38 @@ worth the same in a dispute. A parked transmission offers a retry, which re-uses
 
 ---
 
+## Working across many clients
+
+The screens were built for a tenant with three client businesses. An accountant has two hundred,
+and at that size almost every one of them answered the wrong question.
+
+`/tableau-de-bord` counted three totals and listed five invoices. Worse, its "des factures reçues ne
+sont pas conformes" warning was computed **over those five** — a sample presented as a fact, so a
+tenant with a sixth non-conforming invoice was told everything was fine. `/factures` offered one
+filter pill per business, which at two hundred is not a filter but a second list to search. And
+`/clients` was a grid of identical cards, so finding the broken one was a reading exercise.
+
+[`GET /client-orgs/overview`](apps/api/src/invoicing/client-orgs.controller.ts) replaces the
+guesswork with **six aggregates, whatever the client count** — counted in the database rather than
+by looping the businesses, because the loop is the version that works against three rows in
+development and falls over in front of the customer the feature exists for.
+
+The scoping subtlety is worth stating, because it is not where you would look for it. Every
+aggregate carries the tenant and scope predicates, but that is defence in depth; what actually keeps
+the endpoint safe is that the **scoped business list is the only list**. Counts are read out of maps
+keyed by an id from it, and the totals are summed from the merged rows rather than from the raw
+`groupBy` results — so a count belonging to a business out of scope is never read, even if a
+predicate later goes missing. Confirmed by mutation: removing the scope from one aggregate does not
+change any response, while removing it from the business list fails two tests. A total is a
+disclosure too — "12 non-conforming invoices" tells a client user about eleven documents they may
+not open.
+
+The dashboard now leads with a worklist, and **renders nothing at zero**. A dashboard of green
+zeroes trains people to stop reading it, and the one number that matters then arrives in the same
+typeface as eight that do not.
+
+---
+
 ## Correctness notes
 
 **Money is never a float.** All amounts are exact `bigint`-backed decimals
@@ -558,7 +590,7 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**380 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
+**383 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
 mocked client would happily accept a `number` where the schema wants `NUMERIC` and prove nothing
 about the cent that matters — and because the transmission queue's guarantees are the database's:
 that a double enqueue is refused by a unique constraint, that `FOR UPDATE SKIP LOCKED` gives two
@@ -593,7 +625,12 @@ is unreachable, so `pnpm test` works without Docker.
   endpoint ([`pdp-webhook.controller.ts`](apps/api/src/pdp/pdp-webhook.controller.ts)).
   **Still to build:** an adapter for a real certified platform — the sandbox provider is what the
   pipeline is proven against, and this is the one thing standing between the phase and completion.
-- **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
+- **Phase 3 — accountant multi-client dashboard.** 🚧 The monetisation unlock, and the phase where
+  the screens stop being built for one business. `GET /client-orgs/overview`
+  ([`client-orgs.controller.ts`](apps/api/src/invoicing/client-orgs.controller.ts)) answers "which
+  of my clients needs me today" in a fixed six aggregates, and the dashboard leads with that
+  worklist rather than with three totals. **Still to build:** a per-client detail page, bulk
+  issue/monitor actions, and per-client archive export.
 - **Phase 4 — e-reporting, more platforms, embeddable API.**
 
 ### Decisions taken

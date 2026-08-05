@@ -1,10 +1,16 @@
 import Link from 'next/link';
 import type { Metadata } from 'next';
-import { api, ApiError, type ClientOrgSummary } from '@/lib/api';
+import {
+  api,
+  ApiError,
+  type ClientOrgOverview,
+  type ClientOrgOverviewPage,
+  type ClientOrgSummary,
+} from '@/lib/api';
 import { can } from '@facturx/auth';
 import { Alert } from '@/components/ui/Form';
 import { requireUser } from '@/lib/session';
-import { formatSirenDisplay, formatSiretDisplay } from '@/lib/format';
+import { BLOCKER_LABELS, formatSirenDisplay, formatSiretDisplay } from '@/lib/format';
 
 export const metadata: Metadata = { title: 'Entreprises clientes' };
 export const dynamic = 'force-dynamic';
@@ -20,8 +26,14 @@ export default async function ClientsPage({
   const mayIssue = can(actor.role, 'invoice:issue');
 
   let clientOrgs: ClientOrgSummary[];
+  let overview: ClientOrgOverviewPage | null = null;
   try {
-    clientOrgs = await api<ClientOrgSummary[]>('/client-orgs');
+    [clientOrgs, overview] = await Promise.all([
+      api<ClientOrgSummary[]>('/client-orgs'),
+      // Allowed to fail on its own: the status chips are an enrichment, and losing them should not
+      // cost the user the list of businesses they came here for.
+      api<ClientOrgOverviewPage>('/client-orgs/overview').catch(() => null),
+    ]);
   } catch (error) {
     return (
       <Alert tone="error" title="Impossible de charger vos entreprises clientes">
@@ -29,6 +41,8 @@ export default async function ClientsPage({
       </Alert>
     );
   }
+
+  const statusById = new Map((overview?.clientOrgs ?? []).map((org) => [org.id, org]));
 
   return (
     <div className="space-y-6">
@@ -114,6 +128,13 @@ export default async function ClientsPage({
                 </div>
               </dl>
 
+              {/*
+                What this business needs, on the card rather than one click into it. A cabinet
+                scanning two hundred of these is looking for the ones that are wrong, and a grid
+                where every card looks identical makes that a reading exercise.
+              */}
+              <ClientStatus status={statusById.get(org.id)} />
+
               <div className="mt-4 flex items-center justify-between border-t border-navy-50 pt-3 text-sm">
                 <span className="text-navy-500">
                   {org._count.invoices} facture{org._count.invoices > 1 ? 's' : ''}
@@ -132,5 +153,53 @@ export default async function ClientsPage({
         </ul>
       )}
     </div>
+  );
+}
+
+/**
+ * The chips on a client card.
+ *
+ * Silent when there is nothing to say. A card that always carries a row of badges - most of them
+ * reassuring - is a card nobody reads the badges on, and the one that matters then arrives looking
+ * exactly like the four that do not.
+ */
+function ClientStatus({ status }: { status: ClientOrgOverview | undefined }) {
+  if (!status) return null;
+
+  const chips: { tone: 'error' | 'warn'; label: string }[] = [];
+  if (status.stuck > 0) {
+    chips.push({
+      tone: 'error',
+      label: `${status.stuck} facture${status.stuck > 1 ? 's' : ''} bloquée${status.stuck > 1 ? 's' : ''}`,
+    });
+  }
+  if (status.connection?.lastError) chips.push({ tone: 'error', label: 'Raccordement en erreur' });
+  if (status.nonConforming > 0) {
+    chips.push({
+      tone: 'warn',
+      label: `${status.nonConforming} reçue${status.nonConforming > 1 ? 's' : ''} non conforme${status.nonConforming > 1 ? 's' : ''}`,
+    });
+  }
+  for (const blocker of status.blockers) {
+    chips.push({ tone: 'warn', label: BLOCKER_LABELS[blocker] ?? blocker });
+  }
+
+  if (chips.length === 0) return null;
+
+  return (
+    <ul className="mt-3 flex flex-wrap gap-1.5">
+      {chips.map((chip) => (
+        <li
+          key={chip.label}
+          className={`rounded px-2 py-0.5 text-xs font-medium ${
+            chip.tone === 'error'
+              ? 'bg-signal-errorBg text-signal-error'
+              : 'bg-signal-warnBg text-signal-warn'
+          }`}
+        >
+          {chip.label}
+        </li>
+      ))}
+    </ul>
   );
 }

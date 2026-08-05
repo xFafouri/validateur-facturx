@@ -240,6 +240,54 @@ suite('client-org scoping', () => {
   });
 
   /**
+   * The overview answers in aggregate, and a total is a disclosure too: "12 non-conforming
+   * invoices" tells a client user about eleven documents they may not open. So the totals are
+   * asserted separately from the rows rather than assumed to follow from them - they are summed by
+   * their own code path, and that is exactly the sort of second path that gets a predicate wrong.
+   *
+   * Checked by mutation, not by hope: removing the scope predicate from one of the aggregates does
+   * *not* fail this test, because the merge only ever reads counts for businesses already in
+   * `orgs`. That is the property that keeps the endpoint safe, and it is what this asserts.
+   */
+  it('scopes the cross-client overview, rows and totals alike', async () => {
+    await post('/invoices', ownerCookie, invoicePayload(orgB, `OV-${run}`));
+
+    const owner = await get('/client-orgs/overview', ownerCookie).then((r) => r.json());
+    expect(owner.totals.clientOrgs).toBe(2);
+    expect(owner.clientOrgs.map((org: { id: string }) => org.id).sort()).toEqual(
+      [orgA, orgB].sort(),
+    );
+
+    const client = await makeUser('client-overview', 'CLIENT_USER', [orgA]);
+    const scoped = await get('/client-orgs/overview', client).then((r) => r.json());
+
+    expect(scoped.clientOrgs).toHaveLength(1);
+    expect(scoped.clientOrgs[0].id).toBe(orgA);
+    // The per-business rows being right is not enough - the totals are computed from their own
+    // queries, and are what the dashboard actually leads with.
+    expect(scoped.totals.clientOrgs).toBe(1);
+    expect(scoped.totals.issued).toBe(scoped.clientOrgs[0].issued);
+    expect(scoped.totals.received).toBe(scoped.clientOrgs[0].received);
+    expect(scoped.totals.issued).toBeLessThan(owner.totals.issued);
+  });
+
+  it('resolves /client-orgs/overview as the overview, not as a business with that id', async () => {
+    // `@Get(':id')` sits below it and would happily match the literal string "overview",
+    // answering 404 for a route that exists.
+    const response = await get('/client-orgs/overview', ownerCookie);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toHaveProperty('totals');
+  });
+
+  it('reports nothing at all to a client user with no assignment', async () => {
+    const orphan = await makeUser('overview-vide', 'CLIENT_USER', []);
+    const empty = await get('/client-orgs/overview', orphan).then((r) => r.json());
+
+    expect(empty.clientOrgs).toHaveLength(0);
+    expect(empty.totals).toMatchObject({ clientOrgs: 0, issued: 0, received: 0, stuck: 0 });
+  });
+
+  /**
    * Fail closed. A half-finished invitation - a client user created before anyone assigned them a
    * business - must see nothing, not everything.
    */
