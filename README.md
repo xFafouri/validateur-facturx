@@ -11,7 +11,8 @@ that same engine, persisted, and sealed into an immutable content-addressed arch
 user can add the businesses they invoice for, issue an invoice through the UI, **receive supplier
 invoices**, and download the sealed documents. Issued invoices are now **queued, transmitted to a
 certified platform and tracked through their lifecycle statuses**, and invoices addressed to a
-client arrive by polling as well as by upload. See [Roadmap](#roadmap).
+client arrive by polling as well as by upload. Connecting a business to its platform and following
+an invoice's status timeline are both done from the UI. See [Roadmap](#roadmap).
 
 > **Why reception came before the rest of Phase 2.** The 1 September 2026 obligation that applies
 > to _every_ VAT-registered business is the obligation to **receive**. Issuing is phased: large
@@ -43,7 +44,7 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 362 tests
+pnpm verify   # build + format check + typecheck + 371 tests
 ```
 
 The invoicing and archiving suites need Postgres as well, and skip without it:
@@ -209,8 +210,8 @@ account, so response latency cannot be used to enumerate a cabinet's client list
 CSRF has two independent defences: the cookie is `SameSite=Lax`, so a cross-site POST does not
 carry it, and Next.js checks `Origin` against `Host` on every Server Action.
 
-**Not built: password reset.** There is no mail transport yet, so a locked-out user needs an
-operator. Sessions, revocation and account disabling are all in place to support it when there is.
+Password reset and emailed invitations are built on top of this, once there was a mail transport to
+carry them — see [Mail](#mail) and [The links](#the-links).
 
 ---
 
@@ -460,6 +461,33 @@ no generated fallback: without the key, saving a credential is refused rather th
 The envelope carries a version byte, so moving to KMS-wrapped data keys once the hosting region is
 decided is a new version that reads the old one, not an irreversible migration.
 
+### The screens
+
+Two, and the split between them is the one that matters:
+[`/raccordements`](<apps/web/src/app/(app)/raccordements>) is what a business controls, and the
+transmission section of [`/factures/[id]`](<apps/web/src/app/(app)/factures/[id]/page.tsx>) is what
+the platform reports back.
+
+The connection screen shows, per business, which platform it is raccordée to, whether a credential
+is stored, and the verdict of the last check. It never shows a credential — the API has no route
+that would return one, which is what makes encrypting them at rest worth anything. "Jamais vérifié"
+is styled as a warning rather than as neutral text, because it is also the state a connection falls
+back to when its credentials are edited, and an unverified connection's first visible symptom would
+otherwise be an invoice that never leaves.
+
+Which boxes to draw comes from the adapter: `PdpProvider.credentialFields` declares the secrets its
+platform asks for, since only the adapter knows whether that is an API key, an OAuth pair or a
+certificate passphrase. An **empty** declaration means the platform needs none, and the screen says
+so instead of showing an empty form; an **omitted** one falls back to a free-form `CLE=valeur` box
+([`secrets.ts`](apps/web/src/lib/secrets.ts)), so an adapter that has not declared its fields is
+still configurable. That box refuses a malformed line rather than skipping it — a silently dropped
+credential surfaces days later as an authentication error nobody connects back to the typo.
+
+The invoice timeline is append-only and shown in full, superseded entries included, with the source
+of each entry labelled: an event we recorded about ourselves and one the platform asserted are not
+worth the same in a dispute. A parked transmission offers a retry, which re-uses the original
+`idempotencyKey` so the platform recognises a resend rather than a second invoice.
+
 ### What Phase 2 changed in the schema
 
 - **`LifecycleStatus` gained a unique `(invoiceId, code, occurredAt)`.** It is what makes a lagging
@@ -509,7 +537,7 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**362 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
+**371 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
 mocked client would happily accept a `number` where the schema wants `NUMERIC` and prove nothing
 about the cent that matters — and because the transmission queue's guarantees are the database's:
 that a double enqueue is refused by a unique constraint, that `FOR UPDATE SKIP LOCKED` gives two
@@ -537,10 +565,11 @@ is unreachable, so `pnpm test` works without Docker.
   ([`apps/api/src/pdp`](apps/api/src/pdp)) — a Postgres-backed queue that is idempotent at three
   layers, exponential backoff with a lease, DGFiP status ingestion that cannot walk an invoice
   backwards, and encrypted per-business credentials. Inbound polling gives reception a second
-  doorway, so upload is no longer the only transport.
+  doorway, so upload is no longer the only transport. The screens close the loop: a business is
+  connected and checked from [`/raccordements`](<apps/web/src/app/(app)/raccordements>), and an
+  invoice is queued, retried and followed through its lifecycle statuses from its own page.
   **Still to build:** an adapter for a real certified platform (the sandbox provider is what the
-  pipeline is proven against), the UI for connecting a business and watching a status timeline, and
-  webhooks to trigger an early poll.
+  pipeline is proven against), and webhooks to trigger an early poll.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
 - **Phase 4 — e-reporting, more platforms, embeddable API.**
 

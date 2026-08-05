@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type {
   InboundInvoice,
   LifecycleStatusUpdate,
+  PdpCredentialField,
   PdpCredentials,
   PdpProvider,
   TransmitRequest,
@@ -23,6 +24,9 @@ import type {
 export class SandboxPdpProvider implements PdpProvider {
   readonly key = 'sandbox';
   readonly displayName = 'Plateforme de test (sandbox)';
+
+  /** Empty, not omitted: this one authenticates nothing, and the screen should say so. */
+  readonly credentialFields: readonly PdpCredentialField[] = [];
 
   private readonly logger = new Logger(SandboxPdpProvider.name);
 

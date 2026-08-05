@@ -13,7 +13,12 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { PdpConnection } from '@prisma/client';
-import { PDP_PROVIDERS, type PdpCredentials, type PdpProvider } from './pdp-provider';
+import {
+  PDP_PROVIDERS,
+  type PdpCredentialField,
+  type PdpCredentials,
+  type PdpProvider,
+} from './pdp-provider';
 import { openCredentials, resolveCredentialsKey, sealCredentials } from './credentials';
 
 /** An adapter paired with the credentials for one particular connection. */
@@ -49,10 +54,18 @@ export class PdpRegistryService {
   }
 
   /** Every registered adapter, for a settings screen offering the choice. */
-  list(): readonly { key: string; displayName: string }[] {
+  list(): readonly {
+    key: string;
+    displayName: string;
+    credentialFields: readonly PdpCredentialField[] | null;
+  }[] {
     return [...this.byKey.values()].map((provider) => ({
       key: provider.key,
       displayName: provider.displayName,
+      // Explicitly `null` when undeclared, because `undefined` disappears from the JSON body and
+      // the screen would then be unable to tell "needs no secret" from "did not say". Those two
+      // draw different forms; see `PdpProvider.credentialFields`.
+      credentialFields: provider.credentialFields ?? null,
     }));
   }
 

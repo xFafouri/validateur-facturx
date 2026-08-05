@@ -17,6 +17,7 @@ const NAV = [
   { href: '/clients', label: 'Entreprises clientes' },
   { href: '/factures', label: 'Factures émises' },
   { href: '/reception', label: 'Factures reçues' },
+  { href: '/raccordements', label: 'Raccordements', permission: 'pdp:read' },
   { href: '/utilisateurs', label: 'Utilisateurs', permission: 'user:manage' },
 ] as const;
 

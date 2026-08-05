@@ -22,6 +22,11 @@ const DATE_SHORT = new Intl.DateTimeFormat('fr-FR', {
   dateStyle: 'short',
   timeZone: 'Europe/Paris',
 });
+const DATE_TIME = new Intl.DateTimeFormat('fr-FR', {
+  dateStyle: 'short',
+  timeStyle: 'short',
+  timeZone: 'Europe/Paris',
+});
 
 /**
  * An amount a received invoice may simply not have stated.
@@ -64,6 +69,20 @@ export function formatDate(iso: string | null | undefined, short = false): strin
   return (short ? DATE_SHORT : DATE).format(date);
 }
 
+/**
+ * A full timestamp, to the minute.
+ *
+ * Distinct from `formatDate` because it must *not* discard the time. An invoice's issue date is a
+ * calendar date, but a status timeline is a sequence of events, and two statuses on the same day
+ * both reading "5 août 2026" would hide the very ordering the timeline exists to show.
+ */
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return DATE_TIME.format(date);
+}
+
 /** `443 061 841`, the way INSEE writes it. */
 export function formatSirenDisplay(siren: string | null | undefined): string {
   if (!siren) return '—';
@@ -92,6 +111,33 @@ export const INVOICE_STATE_LABELS: Record<string, string> = {
   DELIVERED: 'Remise',
   REJECTED: 'Rejetée',
   ARCHIVED: 'Archivée',
+};
+
+/**
+ * The state of one handover attempt, which is not the state of the invoice.
+ *
+ * Kept separate from `INVOICE_STATE_LABELS` on purpose: "transmise" on a transmission means we
+ * handed the bytes over, whereas "remise" on an invoice means the platform says the buyer has it.
+ * Sharing a vocabulary between the two would let a screen claim the second while only the first
+ * has happened.
+ */
+export const TRANSMISSION_STATE_LABELS: Record<string, string> = {
+  PENDING: 'En file d’attente',
+  SENT: 'Déposée sur la plateforme',
+  ACKNOWLEDGED: 'Accusé de réception',
+  FAILED: 'En échec',
+};
+
+/**
+ * Who reported a status.
+ *
+ * Worth showing next to every entry: an event we recorded about ourselves and one the platform
+ * asserted carry very different weight in a dispute, and only the second is evidence.
+ */
+export const STATUS_SOURCE_LABELS: Record<string, string> = {
+  INTERNAL: 'Interne',
+  PA: 'Plateforme',
+  PPF: 'Portail public',
 };
 
 /** BT-3, UNTDID 1001. */

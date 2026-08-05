@@ -267,6 +267,95 @@ export async function apiUpload(
   return (await response.json()) as ReceiveResponse;
 }
 
+// ---------------------------------------------------------------------------
+// Platform connection and transmission
+// ---------------------------------------------------------------------------
+
+/** One secret a platform asks for. Describes the input to draw, never a stored value. */
+export interface PdpCredentialField {
+  key: string;
+  label: string;
+  hint?: string;
+  required?: boolean;
+}
+
+export interface PdpProviderOption {
+  key: string;
+  displayName: string;
+  /**
+   * The fields this platform authenticates with.
+   *
+   * `[]` means it needs no secret at all; `null` means the adapter did not declare them and the
+   * form should offer a free-form list instead. See `PdpProvider.credentialFields` in the API.
+   */
+  credentialFields: PdpCredentialField[] | null;
+}
+
+/**
+ * A stored connection, as the API is willing to describe it.
+ *
+ * There is no field for the credentials and there will not be one: the API returns only whether a
+ * secret is set. A settings screen needs that to prompt for one; it never needs to display it.
+ */
+export interface PdpConnectionRecord {
+  id: string;
+  clientOrgId: string;
+  provider: string;
+  label: string | null;
+  apiBaseUrl: string | null;
+  peppolAddress: string | null;
+  active: boolean;
+  lastPolledAt: string | null;
+  /** Null when never verified, and also when a later edit invalidated the last verdict. */
+  lastVerifiedAt: string | null;
+  lastError: string | null;
+  statusCursor: string | null;
+  inboundCursor: string | null;
+  createdAt: string;
+  updatedAt: string;
+  hasCredentials: boolean;
+  clientOrg: { id: string; name: string; siren: string };
+}
+
+export type TransmissionStateValue = 'PENDING' | 'SENT' | 'ACKNOWLEDGED' | 'FAILED';
+
+export interface TransmissionRecord {
+  id: string;
+  state: TransmissionStateValue;
+  attempt: number;
+  externalId: string | null;
+  lastError: string | null;
+  nextAttemptAt: string;
+  createdAt: string;
+  sentAt: string | null;
+  acknowledgedAt: string | null;
+  pdpConnection: { id: string; provider: string; label: string | null };
+}
+
+export interface LifecycleStatusRecord {
+  id: string;
+  code: string;
+  /** The API resolves a label for known codes, so this is null only for a code we cannot name. */
+  label: string | null;
+  source: 'INTERNAL' | 'PA' | 'PPF';
+  occurredAt: string;
+  recordedAt: string;
+}
+
+export interface InvoiceTransmissions {
+  id: string;
+  invoiceNumber: string;
+  state: string;
+  transmissions: TransmissionRecord[];
+  lifecycleStatuses: LifecycleStatusRecord[];
+}
+
+export interface EnqueueResponse {
+  transmissionId: string;
+  idempotencyKey: string;
+  alreadyQueued: boolean;
+}
+
 export type UserRoleValue = 'OWNER' | 'ACCOUNTANT' | 'CLIENT_USER';
 
 export interface TenantUser {

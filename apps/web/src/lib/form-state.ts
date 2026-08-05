@@ -63,6 +63,33 @@ export interface UserFormState {
 
 export const NO_USER_STATE: UserFormState = { error: null, created: null };
 
+/** Connecting a business to its platform; reports in place so the form keeps its context. */
+export interface PdpConnectionFormState {
+  readonly error: string | null;
+  readonly saved: boolean;
+}
+
+export const NO_PDP_CONNECTION_STATE: PdpConnectionFormState = { error: null, saved: false };
+
+/**
+ * Queueing an invoice, or putting a parked transmission back in the queue.
+ *
+ * `alreadyQueued` is reported rather than smoothed over. Pressing "transmettre" twice is the
+ * natural response to a screen that has not visibly changed, and the honest answer to the second
+ * press is "it was already on its way" — not a second confirmation implying a second send.
+ */
+export interface TransmitFormState {
+  readonly error: string | null;
+  readonly queued: boolean;
+  readonly alreadyQueued: boolean;
+}
+
+export const NO_TRANSMIT_STATE: TransmitFormState = {
+  error: null,
+  queued: false,
+  alreadyQueued: false,
+};
+
 /** Password-reset request: always reports the same thing, whether or not the address exists. */
 export interface ResetRequestState {
   readonly error: string | null;

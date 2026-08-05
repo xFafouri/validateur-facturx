@@ -79,11 +79,43 @@ export interface PdpCredentials {
   readonly secrets: Readonly<Record<string, string>>;
 }
 
+/**
+ * One secret a platform authenticates with, described well enough to draw an input for it.
+ *
+ * Only the shape is described here, never a value: this travels to the settings screen, and the
+ * screen's whole job is to collect a secret it will never be allowed to read back.
+ */
+export interface PdpCredentialField {
+  /** The key this value is stored under in `PdpCredentials.secrets`. */
+  readonly key: string;
+  /** Label for the input, in the platform's own vocabulary - "Client ID", not "secret 1". */
+  readonly label: string;
+  /** Where the user finds this value, which is usually the hard part. */
+  readonly hint?: string;
+  /** Whether the platform refuses to authenticate without it. */
+  readonly required?: boolean;
+}
+
 export interface PdpProvider {
   /** Adapter key stored on `PdpConnection.provider`. */
   readonly key: string;
   /** Display name for the UI. */
   readonly displayName: string;
+
+  /**
+   * The secrets this platform asks for.
+   *
+   * Declared rather than discovered, because the settings screen has to draw the boxes before
+   * anyone has typed into them, and only the adapter knows whether its platform wants an API key,
+   * an OAuth pair or a certificate passphrase.
+   *
+   * Three states, all meaningful. A list names the fields. An **empty** list means the platform
+   * genuinely needs no secret - mutual TLS, or the sandbox - and the screen should say so rather
+   * than show an empty form. **Omitted** means the adapter has not declared them, and the screen
+   * falls back to a free-form list; an adapter that has not got round to this is then still
+   * configurable rather than unusable, which is the point of leaving it optional.
+   */
+  readonly credentialFields?: readonly PdpCredentialField[];
 
   /**
    * Sends an invoice (flow F2, via the platform).

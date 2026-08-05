@@ -1,19 +1,33 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
-import { api, ApiError, type InvoiceDetail, type PartyRecord } from '@/lib/api';
+import { can } from '@facturx/auth';
+import {
+  api,
+  ApiError,
+  type InvoiceDetail,
+  type InvoiceTransmissions,
+  type LifecycleStatusRecord,
+  type PartyRecord,
+  type TransmissionRecord,
+} from '@/lib/api';
 import { Alert } from '@/components/ui/Form';
+import { requireUser } from '@/lib/session';
 import {
   formatBytes,
   formatDate,
+  formatDateTime,
   formatDecimal,
   formatEuros,
   formatOptionalEuros,
   formatSirenDisplay,
   INVOICE_STATE_LABELS,
+  STATUS_SOURCE_LABELS,
+  TRANSMISSION_STATE_LABELS,
   TYPE_CODE_LABELS,
   VAT_CATEGORY_LABELS,
 } from '@/lib/format';
+import { RetryForm, TransmitForm } from './TransmissionActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +52,7 @@ export default async function InvoiceDetailPage({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ emise?: string }>;
 }) {
-  const [{ id }, { emise }] = await Promise.all([params, searchParams]);
+  const [{ id }, { emise }, actor] = await Promise.all([params, searchParams, requireUser()]);
 
   let invoice: InvoiceDetail;
   try {
@@ -50,6 +64,18 @@ export default async function InvoiceDetailPage({
         {error instanceof ApiError ? error.message : 'Le service est injoignable.'}
       </Alert>
     );
+  }
+
+  /*
+    Fetched separately, and allowed to fail on its own. The invoice is the page; its delivery
+    history is a section of it. A platform-side read that breaks should cost the user that
+    section, not the document they came to look at.
+  */
+  let tracking: InvoiceTransmissions | null = null;
+  try {
+    tracking = await api<InvoiceTransmissions>(`/pdp/invoices/${id}/transmissions`);
+  } catch {
+    tracking = null;
   }
 
   const pdf = invoice.archiveEntries.find((entry) => entry.artifactKind === 'facturx-pdf');
@@ -249,6 +275,19 @@ export default async function InvoiceDetailPage({
         </div>
       </section>
 
+      {invoice.direction === 'ISSUED' ? (
+        <TransmissionSection
+          invoiceId={invoice.id}
+          transmissions={tracking?.transmissions ?? []}
+          mayTransmit={can(actor.role, 'invoice:transmit')}
+          unavailable={tracking === null}
+        />
+      ) : null}
+
+      {tracking && tracking.lifecycleStatuses.length > 0 ? (
+        <StatusTimeline statuses={tracking.lifecycleStatuses} />
+      ) : null}
+
       <section className="rounded-lg border border-navy-100 bg-white p-5">
         <h2 className="text-sm font-semibold text-navy-900">Archive</h2>
         <p className="mt-1 text-xs leading-relaxed text-navy-500">
@@ -284,6 +323,156 @@ export default async function InvoiceDetailPage({
         ) : null}
       </section>
     </div>
+  );
+}
+
+/**
+ * The handover: whether this invoice has been given to a platform, and how that went.
+ *
+ * Distinct from the timeline below it. This section is about *our* attempts to hand the document
+ * over — something we control and can retry. The timeline is what the platform reports back, which
+ * we only observe.
+ */
+function TransmissionSection({
+  invoiceId,
+  transmissions,
+  mayTransmit,
+  unavailable,
+}: {
+  invoiceId: string;
+  transmissions: readonly TransmissionRecord[];
+  mayTransmit: boolean;
+  unavailable: boolean;
+}) {
+  return (
+    <section className="rounded-lg border border-navy-100 bg-white p-5">
+      <h2 className="text-sm font-semibold text-navy-900">Transmission</h2>
+
+      {unavailable ? (
+        <p className="mt-2 text-xs text-navy-500">
+          Le suivi de transmission est momentanément indisponible. La facture et son archive ne sont
+          pas affectées.
+        </p>
+      ) : transmissions.length === 0 ? (
+        <>
+          <p className="mt-1 text-xs leading-relaxed text-navy-500">
+            Cette facture n&apos;a pas encore été remise à une plateforme. Une fois en file, elle
+            part au prochain passage du service de transmission, avec une clé d&apos;idempotence qui
+            interdit tout doublon chez le destinataire.
+          </p>
+          {mayTransmit ? (
+            <div className="mt-4">
+              <TransmitForm invoiceId={invoiceId} />
+            </div>
+          ) : (
+            <p className="mt-3 text-xs text-navy-500">
+              Votre rôle ne permet pas de transmettre une facture.
+            </p>
+          )}
+        </>
+      ) : (
+        <ul className="mt-4 space-y-4">
+          {transmissions.map((transmission) => (
+            <li
+              key={transmission.id}
+              className="border-t border-navy-50 pt-4 first:border-0 first:pt-0"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-navy-900">
+                    {TRANSMISSION_STATE_LABELS[transmission.state] ?? transmission.state}
+                  </p>
+                  <p className="mt-0.5 text-xs text-navy-500">
+                    {transmission.pdpConnection.label ?? transmission.pdpConnection.provider} · mise
+                    en file le {formatDateTime(transmission.createdAt)}
+                    {transmission.attempt > 1 ? ` · ${transmission.attempt} tentatives` : ''}
+                  </p>
+                </div>
+                {transmission.externalId ? (
+                  <div className="text-right">
+                    <p className="text-xs text-navy-500">Référence plateforme</p>
+                    <p className="break-all font-mono text-[11px] text-navy-700">
+                      {transmission.externalId}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+
+              {/*
+                A pending row with a future retry is not stuck, and saying when it wakes up is the
+                difference between waiting and opening a support ticket.
+              */}
+              {transmission.state === 'PENDING' && transmission.lastError ? (
+                <p className="mt-2 text-xs text-signal-warn">
+                  Dernier échec : {transmission.lastError} — nouvelle tentative le{' '}
+                  {formatDateTime(transmission.nextAttemptAt)}.
+                </p>
+              ) : null}
+
+              {transmission.state === 'FAILED' ? (
+                <div className="mt-2">
+                  <Alert tone="error" title="Transmission abandonnée">
+                    <p className="break-words font-mono text-xs">
+                      {transmission.lastError ?? 'Cause inconnue.'}
+                    </p>
+                    <p className="mt-2">
+                      Les tentatives automatiques se sont arrêtées : après plusieurs échecs, la
+                      cause est une configuration ou un document refusé, et attendre n&apos;y change
+                      rien. Corrigez le raccordement, puis réessayez.
+                    </p>
+                  </Alert>
+                  {mayTransmit ? (
+                    <RetryForm invoiceId={invoiceId} transmissionId={transmission.id} />
+                  ) : null}
+                </div>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * What the platform has reported back, oldest first.
+ *
+ * Append-only and shown in full, including superseded entries: a status history is evidence, and
+ * "when did the buyer receive it" is answered by the sequence, not by the last line of it. The
+ * source of each entry is labelled because an event we recorded about ourselves and one the
+ * platform asserted are not worth the same in a dispute.
+ */
+function StatusTimeline({ statuses }: { statuses: readonly LifecycleStatusRecord[] }) {
+  return (
+    <section className="rounded-lg border border-navy-100 bg-white p-5">
+      <h2 className="text-sm font-semibold text-navy-900">Suivi du cycle de vie</h2>
+
+      <ol className="mt-4 space-y-0">
+        {statuses.map((status, index) => (
+          <li key={status.id} className="flex gap-3">
+            <div className="flex flex-col items-center" aria-hidden="true">
+              <span
+                className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                  status.source === 'INTERNAL' ? 'bg-navy-300' : 'bg-navy-700'
+                }`}
+              />
+              {index < statuses.length - 1 ? <span className="w-px flex-1 bg-navy-100" /> : null}
+            </div>
+
+            <div className={index < statuses.length - 1 ? 'pb-4' : ''}>
+              <p className="text-sm text-navy-900">
+                {/* A code no adapter has taught us to name is still shown, rather than hidden. */}
+                {status.label ?? status.code}
+              </p>
+              <p className="mt-0.5 text-xs text-navy-500">
+                {formatDateTime(status.occurredAt)} ·{' '}
+                {STATUS_SOURCE_LABELS[status.source] ?? status.source}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
