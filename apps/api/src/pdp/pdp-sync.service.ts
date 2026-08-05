@@ -87,23 +87,40 @@ export class PdpSyncService {
   /** Polls both flows for every active connection. Never throws; one bad connection is isolated. */
   async pollAll(): Promise<void> {
     for (const connection of await this.activeConnections()) {
-      try {
-        await this.pollStatuses(connection);
-        await this.pollInbound(connection);
-        await this.prisma.pdpConnection.update({
+      await this.pollConnection(connection);
+    }
+  }
+
+  /**
+   * Polls both flows for one connection, recording the outcome on the row.
+   *
+   * Never throws, because both callers need that. The tick must reach the connections behind a
+   * broken one, and the webhook endpoint has already answered the platform by the time this runs -
+   * an exception there would surface as an unhandled rejection rather than as anything a caller
+   * could act on. The failure goes on the connection instead, where the settings screen shows it.
+   *
+   * Safe to run concurrently with the tick. Statuses deduplicate on their unique constraint and
+   * inbound invoices on their content hash, so a webhook-triggered poll racing the timer costs a
+   * duplicated read and writes nothing twice - which is what makes the debounce a courtesy to the
+   * platform rather than a correctness requirement.
+   */
+  async pollConnection(connection: PdpConnection): Promise<void> {
+    try {
+      await this.pollStatuses(connection);
+      await this.pollInbound(connection);
+      await this.prisma.pdpConnection.update({
+        where: { id: connection.id },
+        data: { lastPolledAt: new Date(), lastError: null },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Interrogation de la connexion ${connection.id} en échec : ${message}`);
+      await this.prisma.pdpConnection
+        .update({
           where: { id: connection.id },
-          data: { lastPolledAt: new Date(), lastError: null },
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        this.logger.error(`Interrogation de la connexion ${connection.id} en échec : ${message}`);
-        await this.prisma.pdpConnection
-          .update({
-            where: { id: connection.id },
-            data: { lastPolledAt: new Date(), lastError: message.slice(0, 1000) },
-          })
-          .catch(() => undefined);
-      }
+          data: { lastPolledAt: new Date(), lastError: message.slice(0, 1000) },
+        })
+        .catch(() => undefined);
     }
   }
 

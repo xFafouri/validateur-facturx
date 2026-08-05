@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ArchivingModule } from '../archiving/archiving.module';
 import { InvoicingModule } from '../invoicing/invoicing.module';
 import { PdpController } from './pdp.controller';
+import { PdpWebhookController } from './pdp-webhook.controller';
 import { PdpRegistryService } from './pdp-registry.service';
 import { PdpSyncService } from './pdp-sync.service';
 import { PdpWorker } from './pdp.worker';
@@ -30,7 +31,9 @@ import { PDP_PROVIDERS } from './pdp-provider';
  */
 @Module({
   imports: [ArchivingModule, InvoicingModule],
-  controllers: [PdpController],
+  // `PdpWebhookController` is deliberately unguarded - a platform has no session with us. It is
+  // listed separately so that is visible here rather than only in the file.
+  controllers: [PdpController, PdpWebhookController],
   providers: [
     SandboxPdpProvider,
     {

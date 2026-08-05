@@ -311,10 +311,27 @@ export interface PdpConnectionRecord {
   lastError: string | null;
   statusCursor: string | null;
   inboundCursor: string | null;
+  /** Last webhook accepted, or null when the platform has never called. */
+  lastWebhookAt: string | null;
   createdAt: string;
   updatedAt: string;
   hasCredentials: boolean;
+  /** Whether a webhook token has been minted. The token itself is never returned. */
+  hasWebhook: boolean;
   clientOrg: { id: string; name: string; siren: string };
+}
+
+/**
+ * A freshly minted webhook token.
+ *
+ * The only response in the API that carries a secret, and the only time this one is readable —
+ * only its hash is stored, so it cannot be shown again.
+ */
+export interface WebhookTokenResponse {
+  connectionId: string;
+  token: string;
+  path: string;
+  headerName: string;
 }
 
 export type TransmissionStateValue = 'PENDING' | 'SENT' | 'ACKNOWLEDGED' | 'FAILED';

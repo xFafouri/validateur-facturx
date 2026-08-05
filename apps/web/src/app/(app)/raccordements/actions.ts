@@ -1,8 +1,8 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { api, ApiError, type PdpConnectionRecord } from '@/lib/api';
-import type { PdpConnectionFormState } from '@/lib/form-state';
+import { api, ApiError, type PdpConnectionRecord, type WebhookTokenResponse } from '@/lib/api';
+import type { PdpConnectionFormState, WebhookFormState } from '@/lib/form-state';
 import { parseSecretLines, SecretSyntaxError } from '@/lib/secrets';
 
 /** Empty string to undefined, so an untouched optional input is absent rather than blank. */
@@ -92,6 +92,57 @@ export async function verifyConnection(formData: FormData): Promise<void> {
     (error: unknown) => {
       // A refused *verification* is a stored result, not a thrown error; reaching here means the
       // request itself failed, which the user needs to see rather than have swallowed.
+      if (error instanceof ApiError) throw new Error(error.message);
+      throw error;
+    },
+  );
+
+  revalidatePath('/raccordements');
+}
+
+/**
+ * Mints a webhook token and composes the URL the platform must call.
+ *
+ * The base URL is deployment knowledge rather than something the API can know: the platform
+ * reaches the API from the public internet, whereas everything else in this app talks to it over
+ * a private address. With `PDP_WEBHOOK_BASE_URL` unset the path is returned alone, and the panel
+ * says what has to be prefixed to it — better than inventing an origin that would not resolve.
+ */
+export async function createWebhookToken(
+  _state: WebhookFormState,
+  formData: FormData,
+): Promise<WebhookFormState> {
+  const id = String(formData.get('connectionId') ?? '');
+
+  let result: WebhookTokenResponse;
+  try {
+    result = await api<WebhookTokenResponse>(`/pdp/connections/${encodeURIComponent(id)}/webhook`, {
+      method: 'POST',
+    });
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return { error: error.message, token: null, url: null, headerName: null };
+    }
+    throw error;
+  }
+
+  const base = (process.env.PDP_WEBHOOK_BASE_URL ?? '').replace(/\/+$/, '');
+
+  revalidatePath('/raccordements');
+  return {
+    error: null,
+    token: result.token,
+    url: base === '' ? result.path : `${base}${result.path}`,
+    headerName: result.headerName,
+  };
+}
+
+/** Revokes the webhook token. The endpoint then refuses every call for this connection. */
+export async function revokeWebhookToken(formData: FormData): Promise<void> {
+  const id = String(formData.get('connectionId') ?? '');
+
+  await api(`/pdp/connections/${encodeURIComponent(id)}/webhook`, { method: 'DELETE' }).catch(
+    (error: unknown) => {
       if (error instanceof ApiError) throw new Error(error.message);
       throw error;
     },

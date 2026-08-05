@@ -39,6 +39,7 @@ import {
   TransmissionService,
 } from './transmission.service';
 import { UpsertPdpConnectionDto } from './dto/pdp-connection.dto';
+import { generateWebhookToken, hashWebhookToken } from './webhook-token';
 
 /** The connection fields that are safe to return. Enumerated, so a schema change cannot leak. */
 const CONNECTION_FIELDS = {
@@ -54,6 +55,7 @@ const CONNECTION_FIELDS = {
   lastError: true,
   statusCursor: true,
   inboundCursor: true,
+  lastWebhookAt: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -83,19 +85,23 @@ export class PdpController {
       select: {
         ...CONNECTION_FIELDS,
         credentialsEncrypted: true,
+        webhookSecretHash: true,
         clientOrg: { select: { id: true, name: true, siren: true } },
       },
     });
 
     return {
-      connections: connections.map(({ credentialsEncrypted, ...connection }) => ({
-        ...connection,
-        // Whether a secret is set, never what it is - enough for a settings screen to show
-        // "credentials configured" and to prompt when they are not. The ciphertext is destructured
-        // out rather than deleted afterwards, so a future field cannot be added to the response by
-        // forgetting to remove it.
-        hasCredentials: credentialsEncrypted !== null,
-      })),
+      connections: connections.map(
+        ({ credentialsEncrypted, webhookSecretHash, ...connection }) => ({
+          ...connection,
+          // Whether a secret is set, never what it is - enough for a settings screen to show
+          // "credentials configured" and to prompt when they are not. Both secrets are
+          // destructured out rather than deleted afterwards, so a future field cannot be added to
+          // the response by forgetting to remove it.
+          hasCredentials: credentialsEncrypted !== null,
+          hasWebhook: webhookSecretHash !== null,
+        }),
+      ),
     };
   }
 
@@ -228,6 +234,53 @@ export class PdpController {
       // request succeeded, and its answer is "no".
       return { ok: false, detail };
     }
+  }
+
+  /**
+   * Mints a webhook token for a connection, replacing any existing one.
+   *
+   * **The only route in this file that returns a secret**, and the exception proves the rule: the
+   * credentials rule exists because those secrets belong to the platform and we hold a reversible
+   * copy. This one is ours, we keep only a hash, and there is no second chance to read it - so
+   * returning it here is the sole moment it can be handed over at all.
+   *
+   * Regenerating invalidates the previous token immediately, which is what makes this the remedy
+   * for a leak as well as the way to get a first one.
+   */
+  @Post('connections/:id/webhook')
+  @HttpCode(201)
+  @RequirePermission('pdp:manage')
+  async createWebhookToken(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    const connection = await this.findConnection(user, id);
+
+    const token = generateWebhookToken();
+    await this.prisma.pdpConnection.update({
+      where: { id: connection.id },
+      data: { webhookSecretHash: hashWebhookToken(token), lastWebhookAt: null },
+    });
+
+    return {
+      connectionId: connection.id,
+      // Shown once and never retrievable. The caller must copy it into the platform now.
+      token,
+      path: `/pdp/webhooks/${connection.id}`,
+      headerName: 'X-Webhook-Token',
+    };
+  }
+
+  /** Revokes the webhook token. The endpoint then refuses every call for this connection. */
+  @Delete('connections/:id/webhook')
+  @HttpCode(200)
+  @RequirePermission('pdp:manage')
+  async revokeWebhookToken(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    const connection = await this.findConnection(user, id);
+
+    await this.prisma.pdpConnection.update({
+      where: { id: connection.id },
+      data: { webhookSecretHash: null, lastWebhookAt: null },
+    });
+
+    return { connectionId: connection.id, revoked: true };
   }
 
   /** Deactivates a connection. Never deletes: its transmissions are evidence and must survive. */

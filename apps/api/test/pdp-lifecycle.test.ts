@@ -1,9 +1,10 @@
 /**
- * The two pieces of the PDP layer that are pure functions, tested without a database.
+ * The pieces of the PDP layer that are pure functions, tested without a database.
  *
- * Credential encryption and status ranking both fail quietly when they are wrong - a secret that
- * round-trips through the wrong key, an invoice whose state walks backwards - so they get direct
- * tests rather than being covered incidentally by the integration suite.
+ * Credential encryption, status ranking and webhook authentication all fail quietly when they are
+ * wrong - a secret that round-trips through the wrong key, an invoice whose state walks backwards,
+ * a token comparison that accepts the wrong string - so they get direct tests rather than being
+ * covered incidentally by the integration suite.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,6 +16,13 @@ import {
   secretsEqual,
 } from '../src/pdp/credentials';
 import { advanceState, isLifecycleCode, lifecycleLabel } from '../src/pdp/lifecycle';
+import {
+  generateWebhookToken,
+  hashWebhookToken,
+  shouldPoll,
+  WEBHOOK_DEBOUNCE_MS,
+  webhookTokenMatches,
+} from '../src/pdp/webhook-token';
 
 const KEY = Buffer.alloc(32, 7);
 const OTHER_KEY = Buffer.alloc(32, 9);
@@ -137,5 +145,75 @@ describe('advancing invoice state from a status', () => {
     expect(advanceState('TRANSMITTED', 'ENCAISSEE')).toBeNull();
     expect(advanceState('TRANSMITTED', 'SUSPENDUE')).toBeNull();
     expect(advanceState('QUEUED', 'PAS_UN_STATUT')).toBeNull();
+  });
+});
+
+describe('webhook tokens', () => {
+  it('mints a distinct, prefixed, high-entropy token each time', () => {
+    const first = generateWebhookToken();
+    const second = generateWebhookToken();
+
+    expect(first).toMatch(/^whk_/);
+    expect(first).not.toEqual(second);
+    // 32 bytes of base64url, plus the prefix. Short enough to paste, long enough not to guess.
+    expect(first.length).toBeGreaterThanOrEqual(40);
+  });
+
+  it('recognises its own token', () => {
+    const token = generateWebhookToken();
+    expect(webhookTokenMatches(token, hashWebhookToken(token))).toBe(true);
+  });
+
+  it('refuses a different token, and the hash itself', () => {
+    const token = generateWebhookToken();
+    const stored = hashWebhookToken(token);
+
+    expect(webhookTokenMatches(generateWebhookToken(), stored)).toBe(false);
+    // Presenting the stored digest must not authenticate: a database leak would otherwise be
+    // directly presentable rather than merely embarrassing.
+    expect(webhookTokenMatches(stored, stored)).toBe(false);
+  });
+
+  it('refuses everything when no webhook is configured', () => {
+    // The default for every connection that existed before webhooks did.
+    expect(webhookTokenMatches(generateWebhookToken(), null)).toBe(false);
+    expect(webhookTokenMatches('', null)).toBe(false);
+  });
+
+  it('refuses an empty token and survives a corrupted stored hash', () => {
+    const stored = hashWebhookToken(generateWebhookToken());
+
+    expect(webhookTokenMatches('', stored)).toBe(false);
+    // A truncated hash is a bad row, not a match - and must not throw out of a length check,
+    // which would report an authentication failure as a 500.
+    expect(() => webhookTokenMatches('whk_abc', 'tronqué')).not.toThrow();
+    expect(webhookTokenMatches('whk_abc', 'tronqué')).toBe(false);
+  });
+});
+
+describe('webhook debounce', () => {
+  const now = new Date('2026-08-05T10:00:00Z');
+  const at = (offsetMs: number) => new Date(now.getTime() + offsetMs);
+
+  it('polls when the connection has never had a webhook', () => {
+    expect(shouldPoll(null, now)).toBe(true);
+  });
+
+  it('collapses a burst into one poll', () => {
+    // The case this exists for: ten statuses on one invoice arriving as ten calls in a second.
+    expect(shouldPoll(now, at(0))).toBe(false);
+    expect(shouldPoll(now, at(500))).toBe(false);
+    expect(shouldPoll(now, at(WEBHOOK_DEBOUNCE_MS - 1))).toBe(false);
+  });
+
+  it('polls again once the window has passed', () => {
+    expect(shouldPoll(now, at(WEBHOOK_DEBOUNCE_MS))).toBe(true);
+    expect(shouldPoll(now, at(WEBHOOK_DEBOUNCE_MS * 10))).toBe(true);
+  });
+
+  it('polls rather than wedging when the stored timestamp is in the future', () => {
+    // A clock that stepped back, or a row written by a host running ahead. Refusing would strand
+    // the connection until real time caught up with the bad timestamp.
+    expect(shouldPoll(at(60_000), now)).toBe(true);
   });
 });

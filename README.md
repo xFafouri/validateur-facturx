@@ -44,7 +44,7 @@ pnpm dev:web                        # http://localhost:3000
 Verify everything:
 
 ```bash
-pnpm verify   # build + format check + typecheck + 371 tests
+pnpm verify   # build + format check + typecheck + 380 tests
 ```
 
 The invoicing and archiving suites need Postgres as well, and skip without it:
@@ -449,6 +449,27 @@ Cursors **lag on purpose**. Each is advanced only as far as the last item actual
 crash mid-batch re-reads rather than skips. Re-reading costs nothing — statuses deduplicate on a
 unique constraint, inbound invoices on their content hash — and skipping loses a payable.
 
+**The webhook endpoint is built on exactly that principle.**
+[`pdp-webhook.controller.ts`](apps/api/src/pdp/pdp-webhook.controller.ts) is the one route in the
+application a stranger is expected to call, and it **reads nothing from the body**. A webhook says
+only _poll sooner_; the poll then reads the truth from the platform's own API over an authenticated
+channel. That caps what a forged call can achieve at "made us do work we were going to do anyway",
+where trusting the payload would have turned the same forgery into a fabricated payment status on a
+real invoice. Dropping every webhook on the floor would leave the system slower and still correct.
+
+Three further properties follow from it being unguarded:
+
+- **It authenticates on a token it can only recognise, never read** — 256 bits of CSPRNG output
+  stored as SHA-256, the same primitive as a session. This is the mirror image of the platform
+  credentials below: those are the platform's and must be replayable, so they are encrypted; this
+  one is ours, so it is hashed and shown exactly once when minted.
+- **It answers before it works.** Platforms time webhooks out and retry, and a retry storm is the
+  last thing a slow poll needs, so the poll is fired and not awaited.
+- **It is debounced.** A public endpoint that triggers outbound work is otherwise an amplifier, and
+  platforms legitimately fan out — ten statuses on one invoice can be ten calls in a second. One
+  poll covers them all, because the poll reads everything outstanding since the cursor rather than
+  whatever the notification named.
+
 ### Credentials
 
 `PdpConnection` holds the secret that lets us submit invoices in a business's name, so it is
@@ -537,7 +558,7 @@ The same round trip showed our own generator producing PDFs that failed PDF/A on
 6.1.3: pdf-lib does not write a trailer `/ID`, which no PDF reader complains about and every PDF/A
 validator does.
 
-**371 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
+**380 tests.** The integration suites run against the live engine _and_ a real Postgres, because a
 mocked client would happily accept a `number` where the schema wants `NUMERIC` and prove nothing
 about the cent that matters — and because the transmission queue's guarantees are the database's:
 that a double enqueue is refused by a unique constraint, that `FOR UPDATE SKIP LOCKED` gives two
@@ -568,8 +589,10 @@ is unreachable, so `pnpm test` works without Docker.
   doorway, so upload is no longer the only transport. The screens close the loop: a business is
   connected and checked from [`/raccordements`](<apps/web/src/app/(app)/raccordements>), and an
   invoice is queued, retried and followed through its lifecycle statuses from its own page.
-  **Still to build:** an adapter for a real certified platform (the sandbox provider is what the
-  pipeline is proven against), and webhooks to trigger an early poll.
+  Webhooks close it: a platform can trigger an early poll through an unguarded, payload-ignoring
+  endpoint ([`pdp-webhook.controller.ts`](apps/api/src/pdp/pdp-webhook.controller.ts)).
+  **Still to build:** an adapter for a real certified platform — the sandbox provider is what the
+  pipeline is proven against, and this is the one thing standing between the phase and completion.
 - **Phase 3 — accountant multi-client dashboard.** The monetisation unlock.
 - **Phase 4 — e-reporting, more platforms, embeddable API.**
 

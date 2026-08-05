@@ -12,6 +12,7 @@ import { Alert, Button } from '@/components/ui/Form';
 import { requireUser } from '@/lib/session';
 import { formatDateTime } from '@/lib/format';
 import { ConnectionForm } from './ConnectionForm';
+import { WebhookPanel } from './WebhookPanel';
 import { deactivateConnection, verifyConnection } from './actions';
 
 export const metadata: Metadata = { title: 'Raccordements' };
@@ -196,20 +197,23 @@ function ConnectionDetail({
       ) : null}
 
       {mayManage ? (
-        <div className="mt-4 flex flex-wrap gap-2">
-          <form action={verifyConnection}>
-            <input type="hidden" name="connectionId" value={connection.id} />
-            <Button type="submit" variant="secondary">
-              Vérifier le raccordement
-            </Button>
-          </form>
-          <form action={deactivateConnection}>
-            <input type="hidden" name="connectionId" value={connection.id} />
-            <Button type="submit" variant="secondary">
-              Désactiver
-            </Button>
-          </form>
-        </div>
+        <>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <form action={verifyConnection}>
+              <input type="hidden" name="connectionId" value={connection.id} />
+              <Button type="submit" variant="secondary">
+                Vérifier le raccordement
+              </Button>
+            </form>
+            <form action={deactivateConnection}>
+              <input type="hidden" name="connectionId" value={connection.id} />
+              <Button type="submit" variant="secondary">
+                Désactiver
+              </Button>
+            </form>
+          </div>
+          <WebhookPanel connection={connection} />
+        </>
       ) : null}
     </>
   );

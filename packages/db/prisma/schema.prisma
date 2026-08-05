@@ -535,6 +535,17 @@ model PdpConnection {
   lastVerifiedAt DateTime?
   lastError      String?
 
+  /// SHA-256 of the webhook token, or null when no webhook is configured.
+  ///
+  /// The mirror image of `credentialsEncrypted`: that secret is the platform's and we must be able
+  /// to replay it, so it is encrypted and reversible. This one is *ours* - we mint it, show it
+  /// once, and only ever need to recognise it again - so it is hashed and unrecoverable, like a
+  /// session token. Losing it costs a regeneration, not an account.
+  webhookSecretHash String?
+  /// Last webhook accepted for this connection. Drives the debounce, and shows on the settings
+  /// screen whether the platform is actually calling us.
+  lastWebhookAt     DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

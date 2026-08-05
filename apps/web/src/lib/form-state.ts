@@ -90,6 +90,27 @@ export const NO_TRANSMIT_STATE: TransmitFormState = {
   alreadyQueued: false,
 };
 
+/**
+ * Minting a webhook token.
+ *
+ * The token is carried back in the form state because this is the only moment it exists in
+ * readable form — the server stores a hash. Once the user navigates away it is gone, which is why
+ * the panel says so rather than offering a "show again" the API could not honour.
+ */
+export interface WebhookFormState {
+  readonly error: string | null;
+  readonly token: string | null;
+  readonly url: string | null;
+  readonly headerName: string | null;
+}
+
+export const NO_WEBHOOK_STATE: WebhookFormState = {
+  error: null,
+  token: null,
+  url: null,
+  headerName: null,
+};
+
 /** Password-reset request: always reports the same thing, whether or not the address exists. */
 export interface ResetRequestState {
   readonly error: string | null;
